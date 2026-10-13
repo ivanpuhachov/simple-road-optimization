@@ -62,6 +62,11 @@ const previewState = document.querySelector<HTMLSpanElement>('#preview-state')!;
 const originalTerrainLegend = document.querySelector<HTMLDivElement>('#solution-legend')!;
 const defaultPreviewLegend = document.querySelector<HTMLDivElement>('#default-preview-legend')!;
 const solutionStats = document.querySelector<HTMLDivElement>('#solution-stats')!;
+const surfaceSelector = document.querySelector<HTMLFieldSetElement>('#surface-selector')!;
+const originalSurfaceRadio = document.querySelector<HTMLInputElement>('#surface-original')!;
+const solutionSurfaceRadio = document.querySelector<HTMLInputElement>('#surface-solution')!;
+const originalSurfaceKey = document.querySelector<HTMLElement>('#original-surface-key')!;
+const solutionSurfaceKey = document.querySelector<HTMLElement>('#solution-surface-key')!;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#182421');
@@ -123,8 +128,10 @@ let hasRoadPreview = false;
 let sceneTerrainKey = '';
 let terrainMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null = null;
 let roadMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null = null;
-let originalTerrainLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
+let comparisonTerrainLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
 let solutionImported = false;
+let solutionOriginalTerrain: TerrainFile | null = null;
+let solutionSolvedTerrain: TerrainFile | null = null;
 let importedSolutionPlan: Point2[] | null = null;
 let endpointAIndex = 303;
 let endpointBIndex = 9696;
@@ -665,7 +672,7 @@ function makeRoadMesh(points: Point2[], width: number, flatZ: number): THREE.Mes
   return mesh;
 }
 
-function makeOriginalTerrainLines(data: TerrainFile): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+function makeTerrainLines(data: TerrainFile): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
   const map = data.heightmap;
   const points: number[] = [];
   const zOffset = 0.06;
@@ -746,19 +753,52 @@ function makeSolutionRoad(curve: number[][], width: number): THREE.Mesh<THREE.Bu
 }
 
 function clearSolutionOverlay(): void {
-  if (originalTerrainLines) {
-    scene.remove(originalTerrainLines);
-    originalTerrainLines.geometry.dispose();
-    originalTerrainLines.material.dispose();
-    originalTerrainLines = null;
+  if (comparisonTerrainLines) {
+    scene.remove(comparisonTerrainLines);
+    comparisonTerrainLines.geometry.dispose();
+    comparisonTerrainLines.material.dispose();
+    comparisonTerrainLines = null;
   }
   solutionImported = false;
+  solutionOriginalTerrain = null;
+  solutionSolvedTerrain = null;
   importedSolutionPlan = null;
+  surfaceSelector.hidden = true;
+  solutionSurfaceRadio.checked = true;
+  originalSurfaceKey.className = 'original-key';
+  solutionSurfaceKey.className = 'terrain-key';
   solutionStats.hidden = true;
   originalTerrainLegend.hidden = true;
   defaultPreviewLegend.hidden = false;
   document.querySelector('#preview-subtitle')!.textContent = 'Flat road deck over the terrain';
 }
+
+function updateSolutionSurface(): void {
+  if (!solutionImported || !solutionOriginalTerrain || !solutionSolvedTerrain) return;
+  const showOriginal = originalSurfaceRadio.checked;
+  const primary = showOriginal ? solutionOriginalTerrain : solutionSolvedTerrain;
+  const comparison = showOriginal ? solutionSolvedTerrain : solutionOriginalTerrain;
+  buildTerrain(primary, false);
+  sceneTerrainKey = solutionOriginalTerrain.terrain.type;
+  if (comparisonTerrainLines) {
+    scene.remove(comparisonTerrainLines);
+    comparisonTerrainLines.geometry.dispose();
+    comparisonTerrainLines.material.dispose();
+  }
+  comparisonTerrainLines = makeTerrainLines(comparison);
+  scene.add(comparisonTerrainLines);
+  const terrainKey = solutionOriginalTerrain.terrain.type;
+  const terrainName = terrainTitles[terrainKey] || solutionOriginalTerrain.terrain.description || terrainKey;
+  document.querySelector('#scene-terrain-name')!.textContent = terrainName.toUpperCase()
+    + (showOriginal ? ' · ORIGINAL' : ' · SOLUTION');
+  previewState.textContent = showOriginal ? 'ORIGINAL' : 'SOLUTION';
+  previewState.className = 'preview-state ready';
+  originalSurfaceKey.className = showOriginal ? 'terrain-key' : 'original-key';
+  solutionSurfaceKey.className = showOriginal ? 'original-key' : 'terrain-key';
+}
+
+originalSurfaceRadio.addEventListener('change', updateSolutionSurface);
+solutionSurfaceRadio.addEventListener('change', updateSolutionSurface);
 
 function update3DPreview(): void {
   if (!currentData) return;
@@ -970,24 +1010,23 @@ async function importSolution(files: File[]): Promise<void> {
     mapInstruction.textContent = 'Solution route shown · reset curve to edit Bézier handles.';
     updateEndpointLabels();
 
+    solutionOriginalTerrain = oldTerrain;
+    solutionSolvedTerrain = solvedTerrain;
+    originalSurfaceRadio.checked = false;
+    solutionSurfaceRadio.checked = true;
+    surfaceSelector.hidden = false;
     buildTerrain(solvedTerrain, true);
-    originalTerrainLines = makeOriginalTerrainLines(oldTerrain);
-    scene.add(originalTerrainLines);
+    comparisonTerrainLines = makeTerrainLines(oldTerrain);
+    scene.add(comparisonTerrainLines);
     roadMesh = makeSolutionRoad(solution.curve, solution.constraints.w);
     scene.add(roadMesh);
     solutionImported = true;
     hasRoadPreview = true;
     roadDirty = false;
 
-    const volumes = report.volumes_m3;
-    document.querySelector('#solution-cost')!.textContent = formatMetric(report.total_cost);
-    document.querySelector('#solution-length')!.textContent = formatMetric(report.length_m) + ' m';
-    document.querySelector('#solution-cut-fill')!.textContent = formatMetric(volumes.cut, 1) + ' / ' + formatMetric(volumes.fill, 1);
-    document.querySelector('#solution-import-export')!.textContent = formatMetric(volumes.import, 1) + ' / ' + formatMetric(volumes.export, 1);
-    solutionStats.hidden = false;
     originalTerrainLegend.hidden = false;
     defaultPreviewLegend.hidden = true;
-    document.querySelector('#preview-subtitle')!.textContent = 'Original and solved terrain · optimized road';
+    document.querySelector('#preview-subtitle')!.textContent = 'Choose a surface · comparison shown as wireframe';
     const terrainName = terrainTitles[terrainKey] || oldTerrain.terrain.description || terrainKey;
     document.querySelector('#scene-terrain-name')!.textContent = terrainName.toUpperCase() + ' · SOLUTION';
     previewState.textContent = 'SOLUTION';

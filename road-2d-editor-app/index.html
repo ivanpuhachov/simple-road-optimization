@@ -97,6 +97,11 @@
           </div>
           <div class="scene-wrap">
             <div id="scene-host" aria-label="Three-dimensional terrain and flat road preview"></div>
+            <fieldset id="surface-selector" class="surface-selector" hidden>
+              <legend>3D SURFACE</legend>
+              <label><input id="surface-original" type="radio" name="solution-surface" value="original" /> Original surface</label>
+              <label><input id="surface-solution" type="radio" name="solution-surface" value="solution" checked /> Solution surface</label>
+            </fieldset>
             <div id="scene-loading" class="scene-message"><span class="spinner"></span> Loading terrain model</div>
             <div id="scene-error" class="scene-message error-message" hidden>Terrain could not be loaded.</div>
             <div class="scene-caption"><span><i></i><b id="scene-terrain-name">FLAT FIELD</b></span><span id="scene-size">99 × 99 M</span></div>
@@ -108,7 +113,7 @@
               <span class="preview-note">Update from pane 02 to refresh</span>
             </div>
             <div id="solution-legend" class="preview-legend solution-legend" hidden>
-              <span><i class="original-key"></i> ORIGINAL</span><span><i class="terrain-key"></i> SOLVED TERRAIN</span><span><i class="road-key"></i> SOLUTION ROAD</span>
+              <span><i id="original-surface-key" class="original-key"></i> ORIGINAL SURFACE</span><span><i id="solution-surface-key" class="terrain-key"></i> SOLUTION SURFACE</span><span><i class="road-key"></i> SOLUTION ROAD</span>
             </div>
             <div id="solution-stats" class="solution-stats" hidden>
               <div><small>TOTAL COST</small><strong id="solution-cost">—</strong></div>

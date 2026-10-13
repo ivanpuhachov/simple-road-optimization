@@ -114,6 +114,11 @@ select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid #d9dad0; 
 .scene-message { z-index: 2; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 9px; color: #c8d0c2; font: 9px var(--mono); letter-spacing: .04em; white-space: nowrap; }
 .error-message { max-width: 250px; padding: 12px; border: 1px solid #ffffff2e; border-radius: 3px; background: #182421dc; line-height: 1.5; white-space: normal; }
 .scene-message[hidden] { display: none; }
+.surface-selector { z-index: 2; position: absolute; top: 51px; left: 12px; margin: 0; padding: 5px 8px 7px; display: flex; align-items: center; gap: 11px; border: 1px solid #ffffff42; border-radius: 3px; background: #f8f7f0e8; color: #596354; font: 8px var(--mono); }
+.surface-selector[hidden] { display: none; }
+.surface-selector legend { padding: 0 3px; color: #888e80; font: 7px var(--mono); letter-spacing: .07em; }
+.surface-selector label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
+.surface-selector input { width: 11px; height: 11px; margin: 0; accent-color: #657b56; }
 .spinner { width: 12px; height: 12px; border: 1px solid #ffffff45; border-top-color: #d0c6a2; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .scene-caption, .scene-help { position: absolute; z-index: 1; left: 0; right: 0; padding: 0 13px; display: flex; align-items: center; justify-content: space-between; color: #aab2a8; font: 8px var(--mono); letter-spacing: .06em; pointer-events: none; }
