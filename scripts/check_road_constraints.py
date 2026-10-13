@@ -365,6 +365,10 @@ def check_road(
     strip_errors: list[str] = []
     fold_error: str | None = None
     coverage_error: str | None = None
+    first_boundary_violation: dict[str, Any] | None = None
+    outside_boundary_samples = 0
+    sampled_edge_count = 0
+    sampled_road_bounds: list[float] | None = None
     strip_polygons: list[list[Point2]] = []
     strip_centers: list[Point2] = []
     vertex_normals: list[Point2] | None = None
@@ -439,6 +443,16 @@ def check_road(
                         center[1] + u * normal[1],
                     )
                     edges.append(edge_point)
+                    sampled_edge_count += 1
+                    if sampled_road_bounds is None:
+                        sampled_road_bounds = [
+                            edge_point[0], edge_point[1], edge_point[0], edge_point[1]
+                        ]
+                    else:
+                        sampled_road_bounds[0] = min(sampled_road_bounds[0], edge_point[0])
+                        sampled_road_bounds[1] = min(sampled_road_bounds[1], edge_point[1])
+                        sampled_road_bounds[2] = max(sampled_road_bounds[2], edge_point[0])
+                        sampled_road_bounds[3] = max(sampled_road_bounds[3], edge_point[1])
                     jacobian = cross(
                         (
                             vector[0] + u * normal_derivative[0],
@@ -451,14 +465,28 @@ def check_road(
                             f"segment {segment_index} folds or has zero area near "
                             f"t={t:.4f}, u={u:.4f} m (Jacobian {jacobian:.6g})"
                         )
-                    if (
-                        edge_point[0] < heightmap.origin[0] - 1e-9
-                        or edge_point[0] > heightmap.max_x + 1e-9
-                        or edge_point[1] < heightmap.origin[1] - 1e-9
-                        or edge_point[1] > heightmap.max_y + 1e-9
-                    ) and coverage_error is None:
+                    outside = []
+                    if edge_point[0] < heightmap.origin[0] - 1e-9:
+                        outside.append("west")
+                    if edge_point[0] > heightmap.max_x + 1e-9:
+                        outside.append("east")
+                    if edge_point[1] < heightmap.origin[1] - 1e-9:
+                        outside.append("south")
+                    if edge_point[1] > heightmap.max_y + 1e-9:
+                        outside.append("north")
+                    if outside:
+                        outside_boundary_samples += 1
+                        if first_boundary_violation is None:
+                            first_boundary_violation = {
+                                "segment": segment_index,
+                                "t": t,
+                                "cross_section_side": "negative width edge" if side < 0 else "positive width edge",
+                                "point_m": list(edge_point),
+                                "outside_edges": outside,
+                            }
+                    if outside and coverage_error is None:
                         coverage_error = (
-                            f"segment {segment_index} road edge leaves heightmap coverage "
+                            f"segment {segment_index} road edge leaves heightmap boundary "
                             f"near t={t:.4f}"
                         )
                 left_edge.append(edges[0])
@@ -486,11 +514,35 @@ def check_road(
                     overlap_pairs.append([first_index, second_index])
 
     path_valid = not path_errors
+    boundary_valid = sampled_edge_count > 0 and first_boundary_violation is None
+    boundary_result = {
+        "checked": sampled_edge_count > 0,
+        "valid": boundary_valid,
+        "terrain_bounds_m": {
+            "x_min": heightmap.origin[0],
+            "y_min": heightmap.origin[1],
+            "x_max": heightmap.max_x,
+            "y_max": heightmap.max_y,
+        },
+        "sampled_road_bounds_m": (
+            {
+                "x_min": sampled_road_bounds[0],
+                "y_min": sampled_road_bounds[1],
+                "x_max": sampled_road_bounds[2],
+                "y_max": sampled_road_bounds[3],
+            }
+            if sampled_road_bounds is not None
+            else None
+        ),
+        "outside_sample_count": outside_boundary_samples,
+        "first_outside_sample": first_boundary_violation,
+        "sampling_step_m": GEOMETRY_STEP_M,
+    }
     strip_valid = (
         vertex_normals is not None
         and not strip_errors
         and fold_error is None
-        and coverage_error is None
+        and boundary_valid
         and not overlap_pairs
     )
     checks: dict[str, Any] = {
@@ -498,6 +550,7 @@ def check_road(
         "road_strip": {
             "valid": strip_valid,
             "folding": {"valid": fold_error is None, "error": fold_error},
+            "boundary": boundary_result,
             "heightmap_coverage": {"valid": coverage_error is None, "error": coverage_error},
             "overlap": {"valid": not overlap_pairs, "segment_pairs": overlap_pairs},
             "errors": strip_errors,
