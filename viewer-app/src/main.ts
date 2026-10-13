@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import roadObjectUrl from '../../data/flat_road_example.obj?url';
 import './style.css';
 
 type TerrainFile = {
@@ -23,6 +25,7 @@ const terrainNames: Record<string, string> = {
 
 const viewport = document.querySelector<HTMLDivElement>('#viewport')!;
 const terrainSelect = document.querySelector<HTMLSelectElement>('#terrain-select')!;
+const roadSelect = document.querySelector<HTMLSelectElement>('#road-select')!;
 const loadingState = document.querySelector<HTMLDivElement>('#loading-state')!;
 const errorState = document.querySelector<HTMLDivElement>('#error-state')!;
 const exaggerationInput = document.querySelector<HTMLInputElement>('#exaggeration')!;
@@ -77,6 +80,7 @@ scene.add(referenceAxes);
 
 let terrainMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null = null;
 let gridLines: THREE.LineSegments | null = null;
+let roadSurface: THREE.Group | null = null;
 let currentData: TerrainFile | null = null;
 let currentTerrainKey = 'flat';
 let loadSequence = 0;
@@ -333,6 +337,24 @@ function clearReferenceAxes(): void {
   }
 }
 
+async function loadRoadSurface(): Promise<void> {
+  const response = await fetch(roadObjectUrl);
+  if (!response.ok) throw new Error(`Could not load road surface: ${response.status}`);
+
+  roadSurface = new OBJLoader().parse(await response.text());
+  roadSurface.name = 'road-surface';
+  roadSurface.position.z = 0.08;
+  roadSurface.visible = roadSelect.value !== 'none';
+  const roadMaterial = new THREE.MeshStandardMaterial({ color: '#777d7d', roughness: 0.96, side: THREE.DoubleSide });
+  roadSurface.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.material = roadMaterial;
+    object.castShadow = true;
+    object.receiveShadow = true;
+  });
+  scene.add(roadSurface);
+}
+
 function updateReferenceAxes(data: TerrainFile, min: number, max: number, elevationScale: number): void {
   clearReferenceAxes();
   const { origin_m: origin, cell_size_m: cell, width, height } = data.heightmap;
@@ -450,6 +472,9 @@ function resizeRenderer(): void {
 }
 
 terrainSelect.addEventListener('change', () => void loadTerrain(terrainSelect.value));
+roadSelect.addEventListener('change', () => {
+  if (roadSurface) roadSurface.visible = roadSelect.value !== 'none';
+});
 document.querySelector<HTMLButtonElement>('#perspective-mode')!.addEventListener('click', () => setProjection('perspective'));
 document.querySelector<HTMLButtonElement>('#orthographic-mode')!.addEventListener('click', () => setProjection('orthographic'));
 orientationGizmo.querySelectorAll<SVGGElement>('.gizmo-endpoint').forEach((endpoint) => {
@@ -491,6 +516,7 @@ document.querySelector<HTMLButtonElement>('#reset-view')!.addEventListener('clic
 
 new ResizeObserver(resizeRenderer).observe(viewport);
 resizeRenderer();
+void loadRoadSurface().catch((error) => console.error('Could not load the road surface.', error));
 void loadTerrain(terrainSelect.value);
 
 renderer.setAnimationLoop(() => {
