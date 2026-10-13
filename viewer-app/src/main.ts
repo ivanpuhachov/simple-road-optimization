@@ -72,6 +72,8 @@ const ground = new THREE.Mesh(
 ground.position.set(49.5, 49.5, -0.16);
 ground.receiveShadow = true;
 scene.add(ground);
+const referenceAxes = new THREE.Group();
+scene.add(referenceAxes);
 
 let terrainMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null = null;
 let gridLines: THREE.LineSegments | null = null;
@@ -200,7 +202,7 @@ function createGrid(data: TerrainFile, exaggeration: number): void {
 }
 
 function updateDetails(data: TerrainFile, min: number, max: number, resetCamera: boolean): void {
-  const { width, height, origin_m: origin, cell_size_m: cell, heights } = data.heightmap;
+  const { width, height, origin_m: origin, cell_size_m: cell } = data.heightmap;
   const sizeX = (width - 1) * cell[0];
   const sizeY = (height - 1) * cell[1];
   const minText = `${min.toFixed(1)} m`;
@@ -210,8 +212,6 @@ function updateDetails(data: TerrainFile, min: number, max: number, resetCamera:
   document.querySelector('#legend-min')!.textContent = `${min.toFixed(0)} m`;
   document.querySelector('#legend-max')!.textContent = `${max.toFixed(0)} m`;
   document.querySelector('#terrain-description')!.textContent = data.terrain.description;
-  document.querySelector('#viewport-origin')!.textContent = `SW · ${formatCoordinate(origin[0])}, ${formatCoordinate(origin[1])}`;
-  document.querySelector('#origin-coordinate')!.textContent = `SW · (${formatCoordinate(origin[0])}, ${formatCoordinate(origin[1])}, ${heights[0].toFixed(1)} m)`;
   document.querySelector('#view-name')!.textContent = terrainNames[currentTerrainKey].toUpperCase();
   document.querySelector('#view-size')!.textContent = `${sizeX} × ${sizeY} M`;
   document.querySelector('#site-width')!.textContent = `${sizeX} m`;
@@ -223,6 +223,7 @@ function updateDetails(data: TerrainFile, min: number, max: number, resetCamera:
   const elevationScale = Number(exaggerationInput.value);
   const centerZ = ((min + max) / 2) * elevationScale;
   ground.position.set(origin[0] + sizeX / 2, origin[1] + sizeY / 2, min * elevationScale - 0.16);
+  updateReferenceAxes(data, min, max, elevationScale);
   if (resetCamera) {
     controls.target.set(origin[0] + sizeX / 2, origin[1] + sizeY / 2, centerZ);
     setCameraForTerrain(sizeX, sizeY, centerZ);
@@ -314,8 +315,60 @@ function setProjection(mode: 'perspective' | 'orthographic'): void {
   resizeRenderer();
 }
 
-function formatCoordinate(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+function clearReferenceAxes(): void {
+  for (const child of [...referenceAxes.children]) {
+    referenceAxes.remove(child);
+    child.traverse((object) => {
+      const renderable = object as THREE.Mesh | THREE.Line;
+      if ('geometry' in renderable && renderable.geometry) renderable.geometry.dispose();
+      if ('material' in renderable && renderable.material) {
+        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        for (const material of materials) {
+          const texture = (material as THREE.Material & { map?: THREE.Texture | null }).map;
+          texture?.dispose();
+          material.dispose();
+        }
+      }
+    });
+  }
+}
+
+function updateReferenceAxes(data: TerrainFile, min: number, max: number, elevationScale: number): void {
+  clearReferenceAxes();
+  const { origin_m: origin, cell_size_m: cell, width, height } = data.heightmap;
+  const baseZ = 0.04;
+  const start = new THREE.Vector3(origin[0], origin[1], baseZ);
+  const xLength = Math.min(30, (width - 1) * cell[0] * 0.34);
+  const yLength = Math.min(30, (height - 1) * cell[1] * 0.34);
+  const zLength = Math.max(18, Math.min(32, (max - min) * elevationScale + 8));
+
+  const addArrow = (direction: THREE.Vector3, color: string, length: number): void => {
+    const arrow = new THREE.ArrowHelper(direction, start, length, color, Math.min(4, length * 0.17), 2.2);
+    arrow.line.material.depthTest = false;
+    arrow.line.material.depthWrite = false;
+    arrow.line.material.transparent = true;
+    arrow.line.material.opacity = 0.88;
+    arrow.cone.material.depthTest = false;
+    arrow.cone.material.depthWrite = false;
+    arrow.cone.material.transparent = true;
+    arrow.cone.material.opacity = 0.94;
+    arrow.renderOrder = 10;
+    arrow.line.renderOrder = 10;
+    arrow.cone.renderOrder = 10;
+    referenceAxes.add(arrow);
+  };
+
+  addArrow(new THREE.Vector3(1, 0, 0), '#ee827c', xLength);
+  addArrow(new THREE.Vector3(0, 1, 0), '#89c08c', yLength);
+  addArrow(new THREE.Vector3(0, 0, 1), '#83b5e3', zLength);
+
+  const originMarker = new THREE.Mesh(
+    new THREE.RingGeometry(0.8, 1.4, 32),
+    new THREE.MeshBasicMaterial({ color: '#f2e2b7', side: THREE.DoubleSide, depthTest: false, depthWrite: false }),
+  );
+  originMarker.position.copy(start);
+  originMarker.renderOrder = 11;
+  referenceAxes.add(originMarker);
 }
 
 function alignCameraToAxis(axisName: string, sign: number): void {
