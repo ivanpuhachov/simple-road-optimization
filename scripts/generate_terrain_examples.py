@@ -25,6 +25,8 @@ HILL_PEAK_M = 20.0
 HILL_SIGMA_M = 12.0
 RIDGE_PEAK_M = 20.0
 RIDGE_SIGMA_M = 6.0
+CLIFF_HEIGHT_M = 20.0
+CLIFF_TRANSITION_WIDTH_M = 12.0
 
 
 def make_flat_heights() -> list[float]:
@@ -137,6 +139,34 @@ def make_diagonal_ridge_heights(
         return [0.0] * len(heights)
     scale = peak_height_m / sampled_peak
     return [height * scale for height in heights]
+
+
+def make_diagonal_cliff_heights(
+    height_change_m: float = CLIFF_HEIGHT_M,
+    transition_width_m: float = CLIFF_TRANSITION_WIDTH_M,
+) -> list[float]:
+    """Return a smooth diagonal step rising from southwest to northeast."""
+    if height_change_m < 0:
+        raise ValueError("Cliff height change must be nonnegative")
+    if transition_width_m <= 0:
+        raise ValueError("Cliff transition width must be greater than zero")
+
+    sqrt_two = math.sqrt(2.0)
+    line_length = sqrt_two * (GRID_SIZE - 1) * CELL_SIZE_M
+    if transition_width_m > line_length:
+        raise ValueError("Cliff transition width cannot exceed the grid diagonal")
+
+    transition_start = (line_length - transition_width_m) / 2.0
+    heights: list[float] = []
+    for j in range(GRID_SIZE):
+        y = ORIGIN_M[1] + j * CELL_SIZE_M
+        for i in range(GRID_SIZE):
+            x = ORIGIN_M[0] + i * CELL_SIZE_M
+            along = (x + y) / sqrt_two
+            t = min(1.0, max(0.0, (along - transition_start) / transition_width_m))
+            smooth_step = t * t * (3.0 - 2.0 * t)
+            heights.append(height_change_m * smooth_step)
+    return heights
 
 
 def write_obj(path: Path, heights: Sequence[float], object_name: str) -> None:
@@ -281,6 +311,21 @@ def main() -> None:
         default=RIDGE_SIGMA_M,
         help=f"diagonal ridge Gaussian sigma in metres (default: {RIDGE_SIGMA_M:g})",
     )
+    parser.add_argument(
+        "--cliff-height",
+        type=float,
+        default=CLIFF_HEIGHT_M,
+        help=f"diagonal cliff height at the northeast corner (default: {CLIFF_HEIGHT_M:g})",
+    )
+    parser.add_argument(
+        "--cliff-width",
+        type=float,
+        default=CLIFF_TRANSITION_WIDTH_M,
+        help=(
+            "diagonal cliff smooth transition width in metres "
+            f"(default: {CLIFF_TRANSITION_WIDTH_M:g})"
+        ),
+    )
     args = parser.parse_args()
 
     if args.hill_height < 0:
@@ -297,6 +342,13 @@ def main() -> None:
         parser.error("--ridge-height must be nonnegative")
     if args.ridge_sigma <= 0:
         parser.error("--ridge-sigma must be greater than zero")
+    if args.cliff_height < 0:
+        parser.error("--cliff-height must be nonnegative")
+    grid_diagonal_m = math.sqrt(2.0) * (GRID_SIZE - 1) * CELL_SIZE_M
+    if args.cliff_width <= 0 or args.cliff_width > grid_diagonal_m:
+        parser.error(
+            "--cliff-width must be positive and no greater than the grid diagonal"
+        )
 
     rng = random.Random(args.seed)
     random_hill_count = rng.randint(args.min_hills, args.max_hills)
@@ -346,6 +398,20 @@ def main() -> None:
             "peak_height_m": args.ridge_height,
             "gaussian_sigma_m": args.ridge_sigma,
             "path": "southwest to northeast diagonal",
+        },
+    )
+    write_example(
+        args.output_dir,
+        "cliff",
+        "A smooth diagonal cliff rising from 0 m in the southwest to "
+        f"{args.cliff_height:g} m in the northeast.",
+        make_diagonal_cliff_heights(args.cliff_height, args.cliff_width),
+        {
+            "southwest_height_m": 0.0,
+            "northeast_height_m": args.cliff_height,
+            "transition_width_m": args.cliff_width,
+            "profile": "cubic smoothstep",
+            "rise_direction": "southwest to northeast",
         },
     )
 
