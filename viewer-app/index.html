@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f3ed" />
+    <title>Terrain Lab — Road Optimizer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Terrain Lab home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>TERRAIN VIEWER</span>
+        </a>
+        <div class="topbar-right">
+          <span class="live-dot"></span>
+          <span>3D VIEWER</span>
+          <span class="topbar-version">v 01</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <div class="eyebrow"><span>01</span> TERRAIN EXPLORER</div>
+          <h1>Read the<br /><em>landscape.</em></h1>
+          <p class="intro">Explore elevation across the site. Drag to orbit, scroll to zoom.</p>
+
+          <section class="control-section terrain-section" aria-labelledby="terrain-heading">
+            <div class="section-heading">
+              <h2 id="terrain-heading">Terrain sample</h2>
+              <span class="section-index">01 / 03</span>
+            </div>
+            <label class="select-wrap" for="terrain-select">
+              <span class="sr-only">Choose terrain</span>
+              <select id="terrain-select">
+                <option value="flat">Flat field</option>
+                <option value="centered_hill">Central hill</option>
+                <option value="diagonal_ridge">Diagonal ridge</option>
+                <option value="random_hills">Rolling hills</option>
+              </select>
+              <span class="select-arrow" aria-hidden="true">⌄</span>
+            </label>
+            <p class="terrain-description" id="terrain-description">Loading terrain details…</p>
+          </section>
+
+          <section class="control-section" aria-labelledby="elevation-heading">
+            <div class="section-heading">
+              <h2 id="elevation-heading">Elevation</h2>
+              <span class="unit-label">METRES</span>
+            </div>
+            <div class="elevation-range">
+              <div><span class="metric-label">LOW</span><strong id="min-height">—</strong></div>
+              <div class="range-line" aria-hidden="true"><span></span></div>
+              <div class="range-right"><span class="metric-label">HIGH</span><strong id="max-height">—</strong></div>
+            </div>
+            <div class="legend" aria-label="Elevation colour scale">
+              <span id="legend-min">—</span><div class="legend-gradient"></div><span id="legend-max">—</span>
+            </div>
+          </section>
+
+          <section class="control-section" aria-labelledby="display-heading">
+            <div class="section-heading">
+              <h2 id="display-heading">Display</h2>
+              <span class="unit-label">VIEW</span>
+            </div>
+            <div class="slider-heading">
+              <label for="exaggeration">Vertical exaggeration</label>
+              <output id="exaggeration-value" for="exaggeration">1.0×</output>
+            </div>
+            <input id="exaggeration" type="range" min="1" max="3" step="0.1" value="1" />
+            <label class="toggle-row" for="grid-toggle">
+              <span class="toggle-copy"><strong>Surface grid</strong><small>10 m intervals</small></span>
+              <input id="grid-toggle" type="checkbox" />
+              <span class="switch" aria-hidden="true"></span>
+            </label>
+            <div class="projection-control">
+              <span class="projection-label">Projection</span>
+              <div class="projection-switch" role="group" aria-label="Camera projection">
+                <button id="perspective-mode" type="button" aria-pressed="true">Perspective</button>
+                <button id="orthographic-mode" type="button" aria-pressed="false">Orthographic</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="site-facts" aria-label="Terrain dimensions">
+            <div class="section-heading">
+              <h2>Site dimensions</h2>
+              <span class="unit-label">XY PLANE</span>
+            </div>
+            <div class="facts-grid">
+              <div><strong id="site-width">—</strong><span>EAST / WEST</span></div>
+              <div><strong id="site-height">—</strong><span>NORTH / SOUTH</span></div>
+              <div><strong id="vertex-count">—</strong><span>VERTICES</span></div>
+              <div><strong id="cell-count">—</strong><span>CELLS</span></div>
+            </div>
+          </section>
+
+          <footer class="sidebar-footer">
+            <span class="north-marker" aria-hidden="true">N <i>↑</i></span>
+            <span>GRID ORIGIN <strong id="origin-coordinate">SW · (0, 0, 0 m)</strong></span>
+            <button id="reset-view" type="button" class="reset-button" title="Reset camera view">RESET VIEW <span>↺</span></button>
+          </footer>
+        </aside>
+
+        <section class="viewport-panel" aria-label="Interactive 3D terrain view">
+          <div id="viewport" class="viewport">
+            <div class="viewport-topline">
+              <div class="view-caption"><span class="view-dot"></span><span id="view-name">FLAT FIELD</span><span class="caption-divider">/</span><span id="view-size">99 × 99 M</span></div>
+              <div class="header-reference">
+                <span class="axis-label"><b class="axis-x">X</b> EAST <b class="axis-y">Y</b> NORTH <b class="axis-z">Z</b> UP</span>
+                <span class="origin-label">ORIGIN <strong id="viewport-origin">SW · 0, 0</strong></span>
+              </div>
+              <button id="top-view" type="button" class="top-view-button" title="Look straight down from above">
+                <span class="top-view-icon" aria-hidden="true">↑</span> TOP VIEW
+              </button>
+            </div>
+            <div class="loading-state" id="loading-state"><span class="loader"></span><span>Preparing terrain model</span></div>
+            <div class="error-state" id="error-state" hidden>Could not load this terrain. Check that the data file is available.</div>
+            <div class="viewport-bottomline">
+              <span>HEIGHTMAP <strong id="heightmap-size">100 × 100</strong></span>
+              <span class="interaction-hint"><span>↔</span> ORBIT <i>·</i> SCROLL TO ZOOM</span>
+            </div>
+            <div class="orientation-widget">
+              <svg id="orientation-gizmo" viewBox="0 0 100 100" role="group" aria-label="View orientation. Click an axis to align the camera.">
+                <g class="gizmo-axis axis-x"><line id="x-negative-line" x1="50" y1="50" x2="50" y2="50"></line><line id="x-positive-line" x1="50" y1="50" x2="50" y2="50"></line></g>
+                <g class="gizmo-axis axis-y"><line id="y-negative-line" x1="50" y1="50" x2="50" y2="50"></line><line id="y-positive-line" x1="50" y1="50" x2="50" y2="50"></line></g>
+                <g class="gizmo-axis axis-z"><line id="z-negative-line" x1="50" y1="50" x2="50" y2="50"></line><line id="z-positive-line" x1="50" y1="50" x2="50" y2="50"></line></g>
+                <g class="gizmo-endpoint axis-x" data-axis="x" data-sign="-1" tabindex="0" role="button" aria-label="View from west, negative X"><circle r="8"></circle><text text-anchor="middle" dominant-baseline="central">−X</text></g>
+                <g class="gizmo-endpoint axis-x" data-axis="x" data-sign="1" tabindex="0" role="button" aria-label="View from east, positive X"><circle r="8"></circle><text text-anchor="middle" dominant-baseline="central">X</text></g>
+                <g class="gizmo-endpoint axis-y" data-axis="y" data-sign="-1" tabindex="0" role="button" aria-label="View from south, negative Y"><circle r="8"></circle><text text-anchor="middle" dominant-baseline="central">−Y</text></g>
+                <g class="gizmo-endpoint axis-y" data-axis="y" data-sign="1" tabindex="0" role="button" aria-label="View from north, positive Y"><circle r="8"></circle><text text-anchor="middle" dominant-baseline="central">Y</text></g>
+                <g class="gizmo-endpoint axis-z" data-axis="z" data-sign="-1" tabindex="0" role="button" aria-label="View from below, negative Z"><circle r="8"></circle><text text-anchor="middle" dominant-baseline="central">−Z</text></g>
+                <g class="gizmo-endpoint axis-z" data-axis="z" data-sign="1" tabindex="0" role="button" aria-label="Top view, positive Z"><circle r="8"></circle><text text-anchor="middle" dominant-baseline="central">Z</text></g>
+                <circle class="gizmo-center" cx="50" cy="50" r="3"></circle>
+              </svg>
+              <span>VIEW AXES</span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
