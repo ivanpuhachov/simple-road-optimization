@@ -83,7 +83,8 @@
             <div class="plan-actions">
               <button id="update-preview" class="primary-button" type="button">Update 3D preview <span>↗</span></button>
               <button id="export-json" class="secondary-button" type="button">Export problem 1 JSON <span>↓</span></button>
-              <button id="import-solution" class="secondary-button" type="button">Import solution <span>↙</span></button>
+              <button id="import-solution" class="secondary-button" type="button" title="Choose a solution JSON and, optionally, its input and cost report JSON files">Import solution <span>↙</span></button>
+              <input id="solution-files" type="file" accept=".json,application/json" multiple hidden />
             </div>
           </div>
         </section>

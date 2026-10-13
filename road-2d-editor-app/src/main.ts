@@ -54,6 +54,7 @@ const planStatus = document.querySelector<HTMLSpanElement>('#plan-status')!;
 const mapInstruction = document.querySelector<HTMLSpanElement>('#map-instruction')!;
 const updatePreviewButton = document.querySelector<HTMLButtonElement>('#update-preview')!;
 const importSolutionButton = document.querySelector<HTMLButtonElement>('#import-solution')!;
+const solutionFilesInput = document.querySelector<HTMLInputElement>('#solution-files')!;
 const endpointAButton = document.querySelector<HTMLButtonElement>('#set-a')!;
 const endpointBButton = document.querySelector<HTMLButtonElement>('#set-b')!;
 const widthInput = document.querySelector<HTMLInputElement>('#width')!;
@@ -596,7 +597,7 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
   scene.add(mesh);
   sceneTerrainKey = currentTerrainKey;
 
-  document.querySelector('#scene-terrain-name')!.textContent = terrainTitles[currentTerrainKey].toUpperCase();
+  document.querySelector('#scene-terrain-name')!.textContent = (terrainTitles[currentTerrainKey] || currentTerrainKey).toUpperCase();
   document.querySelector('#scene-size')!.textContent = ((map.width - 1) * map.cell_size_m[0])
     + ' × ' + ((map.height - 1) * map.cell_size_m[1]) + ' M';
 
@@ -817,42 +818,139 @@ async function fetchJson<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function importSolution(): Promise<void> {
-  const sequence = ++loadSequence;
+type SelectedJson = { file: File; value: unknown };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRoadDocument(value: unknown): value is RoadDocument {
+  if (!isRecord(value) || !Array.isArray(value.curve) || !isRecord(value.terrain)
+    || !isRecord(value.constraints) || !isRecord(value.costs)) return false;
+  const terrain = value.terrain;
+  return isRecord(terrain.terrain) && isRecord(terrain.heightmap);
+}
+
+function isCostReport(value: unknown): value is CostReport {
+  if (!isRecord(value) || !isRecord(value.volumes_m3)) return false;
+  const volumes = value.volumes_m3;
+  return typeof value.status === 'string'
+    && typeof value.valid === 'boolean'
+    && typeof value.length_m === 'number'
+    && typeof value.total_cost === 'number'
+    && typeof volumes.cut === 'number'
+    && typeof volumes.fill === 'number'
+    && typeof volumes.import === 'number'
+    && typeof volumes.export === 'number';
+}
+
+async function parseSelectedJson(files: File[]): Promise<SelectedJson[]> {
+  return Promise.all(files.map(async (file) => {
+    try {
+      return { file, value: JSON.parse(await file.text()) as unknown };
+    } catch {
+      throw new Error(file.name + ' is not valid JSON.');
+    }
+  }));
+}
+
+function validateTerrain(terrain: TerrainFile, label: string): void {
+  const map = terrain.heightmap;
+  if (typeof terrain.terrain.type !== 'string'
+    || !Number.isInteger(map.width) || map.width < 2
+    || !Number.isInteger(map.height) || map.height < 2
+    || !Array.isArray(map.origin_m) || map.origin_m.length !== 2
+    || !map.origin_m.every(Number.isFinite)
+    || !Array.isArray(map.cell_size_m) || map.cell_size_m.length !== 2
+    || !map.cell_size_m.every((value) => Number.isFinite(value) && value > 0)
+    || !Array.isArray(map.heights) || map.heights.length !== map.width * map.height
+    || !map.heights.every(Number.isFinite)) {
+    throw new Error(label + ' does not contain a valid terrain heightmap.');
+  }
+}
+
+function validateSolution(solution: RoadDocument): void {
+  if (!solution.curve || solution.curve.length < 2
+    || solution.curve.some((point) => !Array.isArray(point) || point.length !== 3
+      || point.some((value) => !Number.isFinite(value)))) {
+    throw new Error('The solution file does not contain a valid 3D road curve.');
+  }
+  validateTerrain(solution.terrain, 'The solution file');
+  const constraints = solution.constraints;
+  const costs = solution.costs;
+  if (!Number.isFinite(constraints.w) || constraints.w <= 0
+    || !Number.isFinite(constraints.maxs) || constraints.maxs < 0
+    || !Number.isFinite(constraints.maxc) || constraints.maxc < 0
+    || ![costs.rb, costs.ed, costs.ef, costs.ei, costs.ex].every((value) => Number.isFinite(value) && value >= 0)) {
+    throw new Error('The solution file is missing road constraints or cost rates.');
+  }
+}
+
+function sameHeightmapGrid(left: TerrainFile, right: TerrainFile): boolean {
+  const a = left.heightmap;
+  const b = right.heightmap;
+  return a.width === b.width && a.height === b.height
+    && a.origin_m[0] === b.origin_m[0] && a.origin_m[1] === b.origin_m[1]
+    && a.cell_size_m[0] === b.cell_size_m[0] && a.cell_size_m[1] === b.cell_size_m[1];
+}
+
+async function originalTerrainFor(solution: RoadDocument, input: RoadDocument | undefined): Promise<TerrainFile> {
+  if (input) {
+    validateTerrain(input.terrain, 'The input file');
+    return input.terrain;
+  }
+  const terrainType = solution.terrain.terrain.type;
+  try {
+    return await fetchJson<TerrainFile>('/terrains/' + encodeURIComponent(terrainType) + '.json');
+  } catch {
+    if (currentData?.terrain.type === terrainType) return currentData;
+    throw new Error('Could not find the original terrain for ' + terrainType + '. Select its input JSON too.');
+  }
+}
+
+async function importSolution(files: File[]): Promise<void> {
+  const sequence = loadSequence;
   importSolutionButton.disabled = true;
   importSolutionButton.textContent = 'Loading…';
   sceneError.hidden = true;
   try {
-    const [solution, report, input] = await Promise.all([
-      fetchJson<RoadDocument>('/problem1-cliff-road-solution.json'),
-      fetchJson<CostReport>('/problem1-cliff-road-report.json'),
-      fetchJson<RoadDocument>('/problem1-cliff-road-input.json'),
-    ]);
+    const selected = await parseSelectedJson(files);
     if (sequence !== loadSequence) return;
-    if (!Array.isArray(solution.curve) || solution.curve.length < 2
-      || solution.curve.some((point) => point.length !== 3 || point.some((value) => !Number.isFinite(value)))) {
-      throw new Error('The solution file does not contain a valid 3D road curve.');
-    }
-    if (report.status !== 'optimal' || !report.valid) {
+    const roadDocuments = selected.filter((entry): entry is SelectedJson & { value: RoadDocument } => isRoadDocument(entry.value));
+    const solutionEntry = roadDocuments.find((entry) => /solution/i.test(entry.file.name))
+      ?? roadDocuments.find((entry) => !/input|original/i.test(entry.file.name));
+    if (!solutionEntry) throw new Error('Select a Problem 1 solution JSON file.');
+    const inputEntry = roadDocuments.find((entry) => entry !== solutionEntry && /input|original/i.test(entry.file.name))
+      ?? (roadDocuments.length > 1 ? roadDocuments.find((entry) => entry !== solutionEntry) : undefined);
+    const reportEntry = selected.find((entry) => isCostReport(entry.value));
+    const reportFile = selected.find((entry) => /report/i.test(entry.file.name));
+    if (reportFile && !isCostReport(reportFile.value)) throw new Error(reportFile.file.name + ' is not a valid cost report.');
+    const solution = solutionEntry.value;
+    const report = reportEntry?.value;
+    const input = inputEntry?.value;
+    validateSolution(solution);
+    if (report && (report.status !== 'optimal' || !report.valid
+      || !Number.isFinite(report.total_cost) || !Number.isFinite(report.length_m))) {
       throw new Error('The cost report does not describe a valid optimal solution.');
     }
 
-    const oldTerrain = input.terrain;
+    const oldTerrain = await originalTerrainFor(solution, input);
+    if (sequence !== loadSequence) return;
     const solvedTerrain = solution.terrain;
+    validateTerrain(solvedTerrain, 'The solution file');
     const terrainKey = oldTerrain.terrain.type;
-    if (!terrainTitles[terrainKey]) throw new Error('No terrain sample is registered for ' + terrainKey + '.');
-    if (oldTerrain.heightmap.heights.length !== oldTerrain.heightmap.width * oldTerrain.heightmap.height
-      || solvedTerrain.heightmap.heights.length !== solvedTerrain.heightmap.width * solvedTerrain.heightmap.height) {
-      throw new Error('The solution terrain dimensions do not match their height samples.');
+    if (terrainKey !== solvedTerrain.terrain.type || !sameHeightmapGrid(oldTerrain, solvedTerrain)) {
+      throw new Error('The original and solved terrain heightmaps must use the same grid.');
     }
 
+    loadSequence += 1;
     clearSolutionOverlay();
     disposeMesh(roadMesh);
     roadMesh = null;
     currentData = oldTerrain;
     currentTerrainKey = terrainKey;
     importedSolutionPlan = solution.curve.map((point) => ({ x: point[0], y: point[1] }));
-    terrainSelect.value = terrainKey;
+    terrainSelect.value = terrainTitles[terrainKey] ? terrainKey : '';
     endpointAIndex = oldTerrain.A ?? solvedTerrain.A ?? indexForPoint({ x: solution.curve[0][0], y: solution.curve[0][1] });
     endpointBIndex = oldTerrain.B ?? solvedTerrain.B ?? indexForPoint({
       x: solution.curve[solution.curve.length - 1][0],
@@ -890,10 +988,19 @@ async function importSolution(): Promise<void> {
     originalTerrainLegend.hidden = false;
     defaultPreviewLegend.hidden = true;
     document.querySelector('#preview-subtitle')!.textContent = 'Original and solved terrain · optimized road';
-    document.querySelector('#scene-terrain-name')!.textContent = terrainTitles[terrainKey].toUpperCase() + ' · SOLUTION';
+    const terrainName = terrainTitles[terrainKey] || oldTerrain.terrain.description || terrainKey;
+    document.querySelector('#scene-terrain-name')!.textContent = terrainName.toUpperCase() + ' · SOLUTION';
     previewState.textContent = 'SOLUTION';
     previewState.className = 'preview-state ready';
-    planStatus.textContent = 'Imported solution · ' + solution.curve.length + ' vertices';
+    planStatus.textContent = 'Imported ' + solutionEntry.file.name + ' · ' + solution.curve.length + ' vertices';
+    if (report) {
+      const volumes = report.volumes_m3;
+      document.querySelector('#solution-cost')!.textContent = formatMetric(report.total_cost);
+      document.querySelector('#solution-length')!.textContent = formatMetric(report.length_m) + ' m';
+      document.querySelector('#solution-cut-fill')!.textContent = formatMetric(volumes.cut, 1) + ' / ' + formatMetric(volumes.fill, 1);
+      document.querySelector('#solution-import-export')!.textContent = formatMetric(volumes.import, 1) + ' / ' + formatMetric(volumes.export, 1);
+      solutionStats.hidden = false;
+    }
     sceneLoading.hidden = true;
   } catch (error) {
     console.error(error);
@@ -901,10 +1008,15 @@ async function importSolution(): Promise<void> {
   } finally {
     importSolutionButton.disabled = false;
     importSolutionButton.innerHTML = 'Import solution <span>↙</span>';
+    solutionFilesInput.value = '';
   }
 }
 
-importSolutionButton.addEventListener('click', () => void importSolution());
+importSolutionButton.addEventListener('click', () => solutionFilesInput.click());
+solutionFilesInput.addEventListener('change', () => {
+  const files = Array.from(solutionFilesInput.files || []);
+  if (files.length) void importSolution(files);
+});
 
 function requiredNumber(id: string, label: string, minimum: number): number {
   const input = document.querySelector<HTMLInputElement>('#' + id)!;

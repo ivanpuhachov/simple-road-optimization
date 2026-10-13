@@ -4,7 +4,7 @@ A standalone route editor for creating Problem 1 road inputs. It does not modify
 
 Terrain choices include the flat field, diagonal cliff, central hill, diagonal ridge, and rolling hills examples in data/terrains.
 
-Use Import solution to load the cliff-road solution, its cost report, and its original input from data. The 3D preview overlays the original surface as a wire grid, the solved terrain as a shaded surface, and the solved road profile.
+Use Import solution to choose a Problem 1 solution JSON. You can also select its input JSON and cost report JSON in the same file picker. The app uses the matching bundled terrain as the original surface when no input JSON is selected. The 3D preview overlays the original surface as a wire grid, the solved terrain as a shaded surface, and the solved road profile. Cost details appear when a report JSON is selected.
 
 ## Run
 
