@@ -7,7 +7,7 @@ Input JSON format::
       "curve": [[x, y, z], ...],
       "terrain": "terrain.json",
       "constraints": {"w": 5.0, "maxs": 0.1, "maxc": 0.1},
-      "costs": {"earth_dig": 1.0, "earth_fill": 1.0}
+      "costs": {"rb": 1.0, "ed": 1.0, "ef": 1.0, "ei": 1.0, "ex": 1.0}
     }
 
 The terrain path is relative to the input JSON. A terrain object can be
@@ -61,6 +61,12 @@ class Heightmap:
         )
 
 
+class MissingParameterError(ValueError):
+    def __init__(self, parameters: Sequence[str]) -> None:
+        self.parameters = list(parameters)
+        super().__init__("missing required parameter(s): " + ", ".join(self.parameters))
+
+
 def finite_number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a number")
@@ -74,6 +80,12 @@ def positive_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return value
+
+
+def require_parameters(document: Mapping[str, Any], names: Sequence[str], context: str) -> None:
+    missing = [f"{context}.{name}" for name in names if name not in document]
+    if missing:
+        raise MissingParameterError(missing)
 
 
 def parse_point3(value: Any, name: str) -> Point3:
@@ -104,8 +116,14 @@ def parse_heightmap(terrain_document: Mapping[str, Any]) -> Heightmap:
 
     width = positive_int(raw.get("width"), "heightmap.width")
     height = positive_int(raw.get("height"), "heightmap.height")
+    if (width, height) != (100, 100):
+        raise ValueError("heightmap.width and heightmap.height must both be 100")
     origin = parse_pair(raw.get("origin_m"), "heightmap.origin_m")
     cell_size = parse_pair(raw.get("cell_size_m"), "heightmap.cell_size_m")
+    if not all(math.isclose(value, 0.0, rel_tol=0.0, abs_tol=1e-9) for value in origin):
+        raise ValueError("heightmap.origin_m must be [0, 0] per data conventions")
+    if not all(math.isclose(value, 1.0, rel_tol=0.0, abs_tol=1e-9) for value in cell_size):
+        raise ValueError("heightmap.cell_size_m must be [1, 1] per data conventions")
     if cell_size[0] <= 0 or cell_size[1] <= 0:
         raise ValueError("heightmap cell sizes must be greater than zero")
 
@@ -141,6 +159,7 @@ def load_input(path: Path) -> tuple[list[Point3], Heightmap, Mapping[str, Any], 
         document = json.load(handle)
     if not isinstance(document, Mapping):
         raise ValueError("road JSON root must be an object")
+    require_parameters(document, ("curve", "terrain", "constraints", "costs"), "road")
 
     raw_curve = document.get("curve")
     if not isinstance(raw_curve, list) or len(raw_curve) < 2:
@@ -148,10 +167,22 @@ def load_input(path: Path) -> tuple[list[Point3], Heightmap, Mapping[str, Any], 
     curve = [parse_point3(vertex, f"curve[{index}]") for index, vertex in enumerate(raw_curve)]
 
     terrain_document, heightmap = load_terrain(document.get("terrain"), path)
+    require_parameters(terrain_document, ("A", "B"), "terrain")
+    endpoint_indices: dict[str, int] = {}
+    for field in ("A", "B"):
+        index = terrain_document[field]
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError(f"terrain.{field} must be an integer height index")
+        if index < 0 or index >= len(heightmap.heights):
+            raise ValueError(f"terrain.{field} index is outside the heightmap")
+        endpoint_indices[field] = index
+    if endpoint_indices["A"] == endpoint_indices["B"]:
+        raise ValueError("terrain.A and terrain.B must be distinct heightmap indices")
 
     raw_constraints = document.get("constraints")
     if not isinstance(raw_constraints, Mapping):
         raise ValueError('"constraints" must be an object with w, maxs, and maxc')
+    require_parameters(raw_constraints, ("w", "maxs", "maxc"), "constraints")
     constraints = {
         "w": finite_number(raw_constraints.get("w"), "constraints.w"),
         "maxs": finite_number(raw_constraints.get("maxs"), "constraints.maxs"),
@@ -164,13 +195,17 @@ def load_input(path: Path) -> tuple[list[Point3], Heightmap, Mapping[str, Any], 
 
     raw_costs = document.get("costs")
     if not isinstance(raw_costs, Mapping):
-        raise ValueError('"costs" must be an object with earth_dig and earth_fill')
+        raise ValueError('"costs" must be an object with rb, ed, ef, ei, and ex')
+    require_parameters(raw_costs, ("rb", "ed", "ef", "ei", "ex"), "costs")
     costs = {
-        "earth_dig": finite_number(raw_costs.get("earth_dig"), "costs.earth_dig"),
-        "earth_fill": finite_number(raw_costs.get("earth_fill"), "costs.earth_fill"),
+        "rb": finite_number(raw_costs.get("rb"), "costs.rb"),
+        "ed": finite_number(raw_costs.get("ed"), "costs.ed"),
+        "ef": finite_number(raw_costs.get("ef"), "costs.ef"),
+        "ei": finite_number(raw_costs.get("ei"), "costs.ei"),
+        "ex": finite_number(raw_costs.get("ex"), "costs.ex"),
     }
-    if costs["earth_dig"] < 0 or costs["earth_fill"] < 0:
-        raise ValueError("earthwork costs must be nonnegative")
+    if any(rate < 0 for rate in costs.values()):
+        raise ValueError("cost rates must be nonnegative")
 
     return curve, heightmap, terrain_document, constraints, costs
 
@@ -200,6 +235,7 @@ def endpoint_errors(
         ("end", curve[-1], "B"),
     ):
         if field not in terrain_document:
+            errors.append(f"terrain.{field} is required")
             continue
         index = terrain_document[field]
         if isinstance(index, bool) or not isinstance(index, int):
@@ -584,10 +620,14 @@ def main() -> int:
         curve, heightmap, terrain_document, constraints, costs = load_input(args.road_json)
         result = check_road(curve, heightmap, terrain_document, constraints)
         result["costs"] = {
-            "earth_dig": costs["earth_dig"],
-            "earth_fill": costs["earth_fill"],
+            **costs,
             "used_for_this_check": False,
         }
+    except MissingParameterError as error:
+        print(f"Missing required parameter(s): {', '.join(error.parameters)}", file=sys.stderr)
+        result = {"status": "invalid_input", "valid": False, "error": str(error)}
+        print(json.dumps(result, indent=2, allow_nan=False))
+        return 2
     except (OSError, json.JSONDecodeError, ValueError, KeyError) as error:
         result = {"status": "invalid_input", "valid": False, "error": str(error)}
         print(json.dumps(result, indent=2, allow_nan=False))

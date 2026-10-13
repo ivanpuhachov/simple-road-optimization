@@ -196,8 +196,11 @@ def write_example(
         "w": 5.0,
         "maxs": 0.1,
         "maxc": 0.1,
-        "earth_dig": 1.0,
-        "earth_fill": 1.0,
+        "rb": 1.0,
+        "ed": 1.0,
+        "ef": 1.0,
+        "ei": 1.0,
+        "ex": 1.0,
     }
     json_path.write_text(
         json.dumps(document, indent=2, allow_nan=False) + "\n", encoding="utf-8"
