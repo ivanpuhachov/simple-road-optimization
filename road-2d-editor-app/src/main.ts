@@ -18,6 +18,19 @@ type TerrainFile = {
   B?: number;
   [key: string]: unknown;
 };
+type RoadDocument = {
+  curve: number[][];
+  terrain: TerrainFile;
+  constraints: { w: number; maxs: number; maxc: number };
+  costs: { rb: number; ed: number; ef: number; ei: number; ex: number };
+};
+type CostReport = {
+  status: string;
+  valid: boolean;
+  length_m: number;
+  total_cost: number;
+  volumes_m3: { cut: number; fill: number; import: number; export: number };
+};
 type MapFrame = { left: number; top: number; scale: number; width: number; height: number };
 type HandleName = 'c1' | 'c2';
 type DragTarget = HandleName | 'A' | 'B';
@@ -25,6 +38,7 @@ type EndpointMode = 'A' | 'B' | null;
 
 const terrainTitles: Record<string, string> = {
   flat: 'Flat field',
+  cliff: 'Diagonal cliff',
   centered_hill: 'Central hill',
   diagonal_ridge: 'Diagonal ridge',
   random_hills: 'Rolling hills',
@@ -39,10 +53,14 @@ const sceneError = document.querySelector<HTMLDivElement>('#scene-error')!;
 const planStatus = document.querySelector<HTMLSpanElement>('#plan-status')!;
 const mapInstruction = document.querySelector<HTMLSpanElement>('#map-instruction')!;
 const updatePreviewButton = document.querySelector<HTMLButtonElement>('#update-preview')!;
+const importSolutionButton = document.querySelector<HTMLButtonElement>('#import-solution')!;
 const endpointAButton = document.querySelector<HTMLButtonElement>('#set-a')!;
 const endpointBButton = document.querySelector<HTMLButtonElement>('#set-b')!;
 const widthInput = document.querySelector<HTMLInputElement>('#width')!;
 const previewState = document.querySelector<HTMLSpanElement>('#preview-state')!;
+const originalTerrainLegend = document.querySelector<HTMLDivElement>('#solution-legend')!;
+const defaultPreviewLegend = document.querySelector<HTMLDivElement>('#default-preview-legend')!;
+const solutionStats = document.querySelector<HTMLDivElement>('#solution-stats')!;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#182421');
@@ -104,6 +122,9 @@ let hasRoadPreview = false;
 let sceneTerrainKey = '';
 let terrainMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null = null;
 let roadMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null = null;
+let originalTerrainLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
+let solutionImported = false;
+let importedSolutionPlan: Point2[] | null = null;
 let endpointAIndex = 303;
 let endpointBIndex = 9696;
 let controlA: Point2 = { x: 34, y: 34 };
@@ -303,18 +324,21 @@ function drawMap(): void {
   const end = toCanvas(pointForIndex(endpointBIndex), frame);
   const firstHandle = toCanvas(controlA, frame);
   const secondHandle = toCanvas(controlB, frame);
-  mapContext.setLineDash([4, 4]);
-  mapContext.strokeStyle = '#f8f6e8d9';
-  mapContext.lineWidth = 1.1;
-  mapContext.beginPath();
-  mapContext.moveTo(start.x, start.y);
-  mapContext.lineTo(firstHandle.x, firstHandle.y);
-  mapContext.moveTo(end.x, end.y);
-  mapContext.lineTo(secondHandle.x, secondHandle.y);
-  mapContext.stroke();
-  mapContext.setLineDash([]);
+  if (!importedSolutionPlan) {
+    mapContext.setLineDash([4, 4]);
+    mapContext.strokeStyle = '#f8f6e8d9';
+    mapContext.lineWidth = 1.1;
+    mapContext.beginPath();
+    mapContext.moveTo(start.x, start.y);
+    mapContext.lineTo(firstHandle.x, firstHandle.y);
+    mapContext.moveTo(end.x, end.y);
+    mapContext.lineTo(secondHandle.x, secondHandle.y);
+    mapContext.stroke();
+    mapContext.setLineDash([]);
+  }
 
-  const curve = sampleBezier().map((point) => toCanvas(point, frame));
+  const route = importedSolutionPlan || sampleBezier();
+  const curve = route.map((point) => toCanvas(point, frame));
   mapContext.beginPath();
   curve.forEach((point, index) => {
     if (index === 0) mapContext.moveTo(point.x, point.y);
@@ -329,12 +353,14 @@ function drawMap(): void {
   mapContext.lineWidth = 2;
   mapContext.stroke();
 
-  drawHandle(firstHandle, 'P1');
-  drawHandle(secondHandle, 'P2');
+  if (!importedSolutionPlan) {
+    drawHandle(firstHandle, 'P1');
+    drawHandle(secondHandle, 'P2');
+  }
   drawEndpoint(start, 'A', '#577a57');
   drawEndpoint(end, 'B', '#c47d59');
   updateEndpointLabels();
-  document.querySelector('#vertex-count')!.textContent = String(curve.length);
+  document.querySelector('#vertex-count')!.textContent = String(route.length);
 }
 
 function drawHandle(point: Point2, label: string): void {
@@ -376,7 +402,14 @@ function updateEndpointLabels(): void {
   document.querySelector('#b-coords')!.textContent = '(' + b.x.toFixed(0) + ', ' + b.y.toFixed(0) + ')';
 }
 
-function setDirty(message?: string): void {
+function setDirty(message?: string, routeChanged = false): void {
+  const wasShowingSolution = routeChanged && importedSolutionPlan !== null;
+  if (routeChanged) importedSolutionPlan = null;
+  if (wasShowingSolution) {
+    mapInstruction.textContent = activeEndpoint
+      ? 'Click a heightmap grid point to set endpoint ' + activeEndpoint + '.'
+      : 'Drag A / B to move endpoints, or P1 / P2 to shape the curve.';
+  }
   roadDirty = true;
   if (hasRoadPreview) {
     previewState.textContent = 'PREVIEW STALE';
@@ -393,7 +426,9 @@ function setEndpointSelection(mode: EndpointMode): void {
   mapCanvas.classList.toggle('pick-mode', mode !== null);
   mapInstruction.textContent = mode
     ? 'Click a heightmap grid point to set endpoint ' + mode + '.'
-    : 'Drag A / B to move endpoints, or P1 / P2 to shape the curve.';
+    : importedSolutionPlan
+      ? 'Solution route shown · reset curve to edit Bézier handles.'
+      : 'Drag A / B to move endpoints, or P1 / P2 to shape the curve.';
 }
 
 function eventPoint(event: PointerEvent): Point2 {
@@ -402,6 +437,7 @@ function eventPoint(event: PointerEvent): Point2 {
 }
 
 function handleAt(point: Point2, frame: MapFrame): HandleName | null {
+  if (importedSolutionPlan) return null;
   const c1 = toCanvas(controlA, frame);
   const c2 = toCanvas(controlB, frame);
   const d1 = Math.hypot(point.x - c1.x, point.y - c1.y);
@@ -429,7 +465,7 @@ function setPickedEndpoint(mode: 'A' | 'B', point: Point2): void {
   else endpointBIndex = index;
   resetHandles();
   setEndpointSelection(null);
-  setDirty('Endpoint updated · adjust curve or refresh preview');
+  setDirty('Endpoint updated · adjust curve or refresh preview', true);
 }
 
 mapCanvas.addEventListener('pointerdown', (event) => {
@@ -473,7 +509,7 @@ mapCanvas.addEventListener('pointermove', (event) => {
     const dy = nextAnchor.y - start.y;
     if (activeDrag === 'A') controlA = { x: handleStart.x + dx, y: handleStart.y + dy };
     else controlB = { x: handleStart.x + dx, y: handleStart.y + dy };
-    setDirty('Endpoint moved · update preview');
+    setDirty('Endpoint moved · update preview', true);
     return;
   }
   const bounds = currentData.heightmap;
@@ -485,7 +521,7 @@ mapCanvas.addEventListener('pointermove', (event) => {
   };
   if (activeDrag === 'c1') controlA = moved;
   else controlB = moved;
-  setDirty('Curve changed · update preview');
+  setDirty('Curve changed · update preview', true);
 });
 
 function stopMapDrag(): void {
@@ -501,7 +537,7 @@ endpointAButton.addEventListener('click', () => setEndpointSelection(activeEndpo
 endpointBButton.addEventListener('click', () => setEndpointSelection(activeEndpoint === 'B' ? null : 'B'));
 document.querySelector<HTMLButtonElement>('#reset-curve')!.addEventListener('click', () => {
   resetHandles();
-  setDirty('Curve reset to a straight route');
+  setDirty('Curve reset to a straight route', true);
 });
 
 function disposeMesh<TGeometry extends THREE.BufferGeometry, TMaterial extends THREE.Material>(
@@ -628,6 +664,101 @@ function makeRoadMesh(points: Point2[], width: number, flatZ: number): THREE.Mes
   return mesh;
 }
 
+function makeOriginalTerrainLines(data: TerrainFile): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+  const map = data.heightmap;
+  const points: number[] = [];
+  const zOffset = 0.06;
+  const at = (i: number, j: number): [number, number, number] => [
+    map.origin_m[0] + i * map.cell_size_m[0],
+    map.origin_m[1] + j * map.cell_size_m[1],
+    map.heights[j * map.width + i] + zOffset,
+  ];
+  const rowIndices = new Set<number>();
+  const columnIndices = new Set<number>();
+  for (let j = 0; j < map.height; j += 4) rowIndices.add(j);
+  for (let i = 0; i < map.width; i += 4) columnIndices.add(i);
+  rowIndices.add(map.height - 1);
+  columnIndices.add(map.width - 1);
+
+  for (const j of rowIndices) {
+    for (let i = 0; i < map.width - 1; i += 1) points.push(...at(i, j), ...at(i + 1, j));
+  }
+  for (const i of columnIndices) {
+    for (let j = 0; j < map.height - 1; j += 1) points.push(...at(i, j), ...at(i, j + 1));
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+  const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
+    color: '#dfc99d',
+    transparent: true,
+    opacity: 0.78,
+    depthTest: false,
+    depthWrite: false,
+  }));
+  lines.renderOrder = 3;
+  return lines;
+}
+
+function makeSolutionRoad(curve: number[][], width: number): THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> {
+  const positions = new Float32Array(curve.length * 6);
+  const indices: number[] = [];
+  for (let index = 0; index < curve.length; index += 1) {
+    const previous = curve[Math.max(0, index - 1)];
+    const next = curve[Math.min(curve.length - 1, index + 1)];
+    let dx = next[0] - previous[0];
+    let dy = next[1] - previous[1];
+    const length = Math.hypot(dx, dy) || 1;
+    dx /= length;
+    dy /= length;
+    const nx = -dy;
+    const ny = dx;
+    const halfWidth = width / 2;
+    const point = curve[index];
+    const offset = index * 6;
+    positions[offset] = point[0] + nx * halfWidth;
+    positions[offset + 1] = point[1] + ny * halfWidth;
+    positions[offset + 2] = point[2] + 0.12;
+    positions[offset + 3] = point[0] - nx * halfWidth;
+    positions[offset + 4] = point[1] - ny * halfWidth;
+    positions[offset + 5] = point[2] + 0.12;
+    if (index > 0) {
+      const previousLeft = (index - 1) * 2;
+      const previousRight = previousLeft + 1;
+      const currentLeft = index * 2;
+      const currentRight = currentLeft + 1;
+      indices.push(previousLeft, currentLeft, currentRight, previousLeft, currentRight, previousRight);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const road = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+    color: '#dedacb',
+    side: THREE.DoubleSide,
+    depthTest: false,
+    depthWrite: false,
+  }));
+  road.renderOrder = 5;
+  return road;
+}
+
+function clearSolutionOverlay(): void {
+  if (originalTerrainLines) {
+    scene.remove(originalTerrainLines);
+    originalTerrainLines.geometry.dispose();
+    originalTerrainLines.material.dispose();
+    originalTerrainLines = null;
+  }
+  solutionImported = false;
+  importedSolutionPlan = null;
+  solutionStats.hidden = true;
+  originalTerrainLegend.hidden = true;
+  defaultPreviewLegend.hidden = false;
+  document.querySelector('#preview-subtitle')!.textContent = 'Flat road deck over the terrain';
+}
+
 function update3DPreview(): void {
   if (!currentData) return;
   const width = widthInput.valueAsNumber;
@@ -640,8 +771,12 @@ function update3DPreview(): void {
     planStatus.textContent = 'A and B must be different heightmap indices';
     return;
   }
+  const restoreEditorTerrain = solutionImported;
+  clearSolutionOverlay();
+  mapInstruction.textContent = 'Drag A / B to move endpoints, or P1 / P2 to shape the curve.';
+  drawMap();
   const resetCamera = sceneTerrainKey !== currentTerrainKey;
-  if (resetCamera || !terrainMesh) buildTerrain(currentData, resetCamera || !terrainMesh);
+  if (restoreEditorTerrain || resetCamera || !terrainMesh) buildTerrain(currentData, resetCamera || !terrainMesh);
   disposeMesh(roadMesh);
   const elevations = currentData.heightmap.heights;
   const min = Math.min(...elevations);
@@ -657,6 +792,119 @@ function update3DPreview(): void {
 }
 
 updatePreviewButton.addEventListener('click', update3DPreview);
+
+function formatMetric(value: number, digits = 2): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function setControlsFromCurve(curve: number[][]): void {
+  if (curve.length < 3) {
+    resetHandles();
+    return;
+  }
+  const a = pointForIndex(endpointAIndex);
+  const b = pointForIndex(endpointBIndex);
+  const scale = (curve.length - 1) / 3;
+  const first = curve[1];
+  const last = curve[curve.length - 2];
+  controlA = { x: a.x + (first[0] - a.x) * scale, y: a.y + (first[1] - a.y) * scale };
+  controlB = { x: b.x + (last[0] - b.x) * scale, y: b.y + (last[1] - b.y) * scale };
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error('Could not load ' + path + ' (' + response.status + ')');
+  return (await response.json()) as T;
+}
+
+async function importSolution(): Promise<void> {
+  const sequence = ++loadSequence;
+  importSolutionButton.disabled = true;
+  importSolutionButton.textContent = 'Loading…';
+  sceneError.hidden = true;
+  try {
+    const [solution, report, input] = await Promise.all([
+      fetchJson<RoadDocument>('/problem1-cliff-road-solution.json'),
+      fetchJson<CostReport>('/problem1-cliff-road-report.json'),
+      fetchJson<RoadDocument>('/problem1-cliff-road-input.json'),
+    ]);
+    if (sequence !== loadSequence) return;
+    if (!Array.isArray(solution.curve) || solution.curve.length < 2
+      || solution.curve.some((point) => point.length !== 3 || point.some((value) => !Number.isFinite(value)))) {
+      throw new Error('The solution file does not contain a valid 3D road curve.');
+    }
+    if (report.status !== 'optimal' || !report.valid) {
+      throw new Error('The cost report does not describe a valid optimal solution.');
+    }
+
+    const oldTerrain = input.terrain;
+    const solvedTerrain = solution.terrain;
+    const terrainKey = oldTerrain.terrain.type;
+    if (!terrainTitles[terrainKey]) throw new Error('No terrain sample is registered for ' + terrainKey + '.');
+    if (oldTerrain.heightmap.heights.length !== oldTerrain.heightmap.width * oldTerrain.heightmap.height
+      || solvedTerrain.heightmap.heights.length !== solvedTerrain.heightmap.width * solvedTerrain.heightmap.height) {
+      throw new Error('The solution terrain dimensions do not match their height samples.');
+    }
+
+    clearSolutionOverlay();
+    disposeMesh(roadMesh);
+    roadMesh = null;
+    currentData = oldTerrain;
+    currentTerrainKey = terrainKey;
+    importedSolutionPlan = solution.curve.map((point) => ({ x: point[0], y: point[1] }));
+    terrainSelect.value = terrainKey;
+    endpointAIndex = oldTerrain.A ?? solvedTerrain.A ?? indexForPoint({ x: solution.curve[0][0], y: solution.curve[0][1] });
+    endpointBIndex = oldTerrain.B ?? solvedTerrain.B ?? indexForPoint({
+      x: solution.curve[solution.curve.length - 1][0],
+      y: solution.curve[solution.curve.length - 1][1],
+    });
+    document.querySelector('#terrain-description')!.textContent = oldTerrain.terrain.description;
+    widthInput.value = String(solution.constraints.w);
+    document.querySelector<HTMLInputElement>('#max-grade')!.value = String(solution.constraints.maxs);
+    document.querySelector<HTMLInputElement>('#max-curvature')!.value = String(solution.constraints.maxc);
+    document.querySelector<HTMLInputElement>('#cost-rb')!.value = String(solution.costs.rb);
+    document.querySelector<HTMLInputElement>('#cost-ed')!.value = String(solution.costs.ed);
+    document.querySelector<HTMLInputElement>('#cost-ef')!.value = String(solution.costs.ef);
+    document.querySelector<HTMLInputElement>('#cost-ei')!.value = String(solution.costs.ei);
+    document.querySelector<HTMLInputElement>('#cost-ex')!.value = String(solution.costs.ex);
+    setControlsFromCurve(solution.curve);
+    drawMap();
+    mapInstruction.textContent = 'Solution route shown · reset curve to edit Bézier handles.';
+    updateEndpointLabels();
+
+    buildTerrain(solvedTerrain, true);
+    originalTerrainLines = makeOriginalTerrainLines(oldTerrain);
+    scene.add(originalTerrainLines);
+    roadMesh = makeSolutionRoad(solution.curve, solution.constraints.w);
+    scene.add(roadMesh);
+    solutionImported = true;
+    hasRoadPreview = true;
+    roadDirty = false;
+
+    const volumes = report.volumes_m3;
+    document.querySelector('#solution-cost')!.textContent = formatMetric(report.total_cost);
+    document.querySelector('#solution-length')!.textContent = formatMetric(report.length_m) + ' m';
+    document.querySelector('#solution-cut-fill')!.textContent = formatMetric(volumes.cut, 1) + ' / ' + formatMetric(volumes.fill, 1);
+    document.querySelector('#solution-import-export')!.textContent = formatMetric(volumes.import, 1) + ' / ' + formatMetric(volumes.export, 1);
+    solutionStats.hidden = false;
+    originalTerrainLegend.hidden = false;
+    defaultPreviewLegend.hidden = true;
+    document.querySelector('#preview-subtitle')!.textContent = 'Original and solved terrain · optimized road';
+    document.querySelector('#scene-terrain-name')!.textContent = terrainTitles[terrainKey].toUpperCase() + ' · SOLUTION';
+    previewState.textContent = 'SOLUTION';
+    previewState.className = 'preview-state ready';
+    planStatus.textContent = 'Imported solution · ' + solution.curve.length + ' vertices';
+    sceneLoading.hidden = true;
+  } catch (error) {
+    console.error(error);
+    planStatus.textContent = error instanceof Error ? error.message : 'Could not import solution';
+  } finally {
+    importSolutionButton.disabled = false;
+    importSolutionButton.innerHTML = 'Import solution <span>↙</span>';
+  }
+}
+
+importSolutionButton.addEventListener('click', () => void importSolution());
 
 function requiredNumber(id: string, label: string, minimum: number): number {
   const input = document.querySelector<HTMLInputElement>('#' + id)!;
@@ -732,13 +980,15 @@ async function loadTerrain(key: string): Promise<void> {
   sceneError.hidden = true;
   sceneLoading.hidden = false;
   try {
-    const response = await fetch('/' + key + '.json');
+    const response = await fetch('/terrains/' + key + '.json');
     if (!response.ok) throw new Error('Could not load terrain: ' + response.status);
     const data = (await response.json()) as TerrainFile;
     if (sequence !== loadSequence) return;
     const map = data.heightmap;
     if (!map || map.heights.length !== map.width * map.height) throw new Error('Heightmap dimensions do not match its samples');
     currentData = data;
+    importedSolutionPlan = null;
+    mapInstruction.textContent = 'Drag A / B to move endpoints, or P1 / P2 to shape the curve.';
     document.querySelector('#terrain-description')!.textContent = data.terrain.description;
     if (endpointAIndex >= map.width * map.height || endpointBIndex >= map.width * map.height) {
       endpointAIndex = Math.min(map.width * 3 + 3, map.width * map.height - 2);

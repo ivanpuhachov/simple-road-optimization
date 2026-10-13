@@ -27,6 +27,7 @@
             <label class="field-label" for="terrain-select">Terrain sample</label>
             <select id="terrain-select">
               <option value="flat">Flat field</option>
+              <option value="cliff">Diagonal cliff</option>
               <option value="centered_hill">Central hill</option>
               <option value="diagonal_ridge">Diagonal ridge</option>
               <option value="random_hills">Rolling hills</option>
@@ -82,6 +83,7 @@
             <div class="plan-actions">
               <button id="update-preview" class="primary-button" type="button">Update 3D preview <span>↗</span></button>
               <button id="export-json" class="secondary-button" type="button">Export problem 1 JSON <span>↓</span></button>
+              <button id="import-solution" class="secondary-button" type="button">Import solution <span>↙</span></button>
             </div>
           </div>
         </section>
@@ -89,7 +91,7 @@
         <section class="panel preview-panel" aria-labelledby="preview-title">
           <div class="panel-heading">
             <span class="step">03</span>
-            <div><h1 id="preview-title">3D preview</h1><p>Flat road deck over the terrain</p></div>
+            <div><h1 id="preview-title">3D preview</h1><p id="preview-subtitle">Flat road deck over the terrain</p></div>
             <span id="preview-state" class="preview-state">TERRAIN</span>
           </div>
           <div class="scene-wrap">
@@ -99,7 +101,21 @@
             <div class="scene-caption"><span><i></i><b id="scene-terrain-name">FLAT FIELD</b></span><span id="scene-size">99 × 99 M</span></div>
             <div class="scene-help">DRAG TO ORBIT <span>·</span> SCROLL TO ZOOM</div>
           </div>
-          <div class="preview-footer"><span class="road-key"></span><span>FLAT ROAD DECK</span><span class="terrain-key"></span><span>TERRAIN</span><span class="preview-note">Update from pane 02 to refresh</span></div>
+          <div class="preview-footer">
+            <div id="default-preview-legend" class="preview-legend">
+              <span><i class="road-key"></i> FLAT ROAD DECK</span><span><i class="terrain-key"></i> TERRAIN</span>
+              <span class="preview-note">Update from pane 02 to refresh</span>
+            </div>
+            <div id="solution-legend" class="preview-legend solution-legend" hidden>
+              <span><i class="original-key"></i> ORIGINAL</span><span><i class="terrain-key"></i> SOLVED TERRAIN</span><span><i class="road-key"></i> SOLUTION ROAD</span>
+            </div>
+            <div id="solution-stats" class="solution-stats" hidden>
+              <div><small>TOTAL COST</small><strong id="solution-cost">—</strong></div>
+              <div><small>LENGTH</small><strong id="solution-length">—</strong></div>
+              <div><small>CUT / FILL · M³</small><strong id="solution-cut-fill">—</strong></div>
+              <div><small>IMPORT / EXPORT · M³</small><strong id="solution-import-export">—</strong></div>
+            </div>
+          </div>
         </section>
       </main>
     </div>

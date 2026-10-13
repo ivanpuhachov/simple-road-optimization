@@ -2,6 +2,10 @@
 
 A standalone route editor for creating Problem 1 road inputs. It does not modify or depend on viewer-app.
 
+Terrain choices include the flat field, diagonal cliff, central hill, diagonal ridge, and rolling hills examples in data/terrains.
+
+Use Import solution to load the cliff-road solution, its cost report, and its original input from data. The 3D preview overlays the original surface as a wire grid, the solved terrain as a shaded surface, and the solved road profile.
+
 ## Run
 
 From this folder, run npm install followed by npm run dev. Open the local URL printed by Vite. Use the Export problem 1 JSON button to download a road input file.
