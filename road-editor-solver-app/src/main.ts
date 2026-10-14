@@ -141,8 +141,8 @@ let solutionImported = false;
 let solutionOriginalTerrain: TerrainFile | null = null;
 let solutionSolvedTerrain: TerrainFile | null = null;
 let importedSolutionPlan: Point2[] | null = null;
-let endpointAIndex = 303;
-let endpointBIndex = 9696;
+let endpointAIndex = 2020;
+let endpointBIndex = 7979;
 let controlA: Point2 = { x: 34, y: 34 };
 let controlB: Point2 = { x: 65, y: 65 };
 let loadSequence = 0;
@@ -1379,8 +1379,10 @@ async function loadTerrain(key: string): Promise<void> {
     mapInstruction.textContent = 'Drag A / B to move endpoints, or P1 / P2 to shape the curve.';
     document.querySelector('#terrain-description')!.textContent = data.terrain.description;
     if (endpointAIndex >= map.width * map.height || endpointBIndex >= map.width * map.height) {
-      endpointAIndex = Math.min(map.width * 3 + 3, map.width * map.height - 2);
-      endpointBIndex = Math.max((map.height - 4) * map.width + map.width - 4, 1);
+      endpointAIndex = Math.round((map.height - 1) * 0.2) * map.width
+        + Math.round((map.width - 1) * 0.2);
+      endpointBIndex = Math.round((map.height - 1) * 0.8) * map.width
+        + Math.round((map.width - 1) * 0.8);
     }
     resetHandles();
     drawMap();
