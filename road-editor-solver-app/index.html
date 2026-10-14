@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f2ec" />
+    <title>Road Editor + Solver — Road Optimizer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Road Plan home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>ROAD PLAN</span>
+        </a>
+        <div class="topbar-note"><span class="live-dot"></span> PROBLEM 1 EDITOR + SOLVER</div>
+      </header>
+
+      <main class="workspace">
+        <aside class="panel settings-panel" aria-labelledby="settings-title">
+          <div class="panel-heading">
+            <span class="step">01</span>
+            <div><h1 id="settings-title">Constraints</h1><p>Terrain, limits, and cost rates</p></div>
+          </div>
+
+          <section class="form-section">
+            <label class="field-label" for="terrain-select">Terrain sample</label>
+            <select id="terrain-select">
+              <option value="flat">Flat field</option>
+              <option value="cliff">Diagonal cliff</option>
+              <option value="centered_hill">Central hill</option>
+              <option value="diagonal_ridge">Diagonal ridge</option>
+              <option value="random_hills">Rolling hills</option>
+            </select>
+            <p class="help" id="terrain-description">Loading terrain…</p>
+          </section>
+
+          <section class="form-section">
+            <div class="section-title"><h2>Road limits</h2><span>PROBLEM 0</span></div>
+            <label class="number-field"><span>Width <small>w · m</small></span><input id="width" type="number" min="0.01" step="0.5" value="5" /></label>
+            <label class="number-field"><span>Max grade <small>maxs</small></span><input id="max-grade" type="number" min="0" step="0.01" value="0.1" /></label>
+            <label class="number-field"><span>Max curvature <small>maxc · 1/m</small></span><input id="max-curvature" type="number" min="0" step="0.01" value="0.1" /></label>
+            <label class="number-field"><span>Curve sample spacing <small>m</small></span><input id="sample-spacing" type="number" min="1" max="20" step="0.5" value="3" /></label>
+            <p class="help">Maximum spacing between route vertices. Smaller values take longer to solve.</p>
+          </section>
+
+          <section class="form-section costs-section">
+            <div class="section-title"><h2>Cost rates</h2><span>PER UNIT</span></div>
+            <label class="number-field"><span>Build <small>rb · /m</small></span><input id="cost-rb" type="number" min="0" step="0.1" value="1" /></label>
+            <label class="number-field"><span>Excavate <small>ed · /m³</small></span><input id="cost-ed" type="number" min="0" step="0.1" value="1" /></label>
+            <label class="number-field"><span>Place fill <small>ef · /m³</small></span><input id="cost-ef" type="number" min="0" step="0.1" value="1" /></label>
+            <label class="number-field"><span>Import <small>ei · /m³</small></span><input id="cost-ei" type="number" min="0" step="0.1" value="1" /></label>
+            <label class="number-field"><span>Export <small>ex · /m³</small></span><input id="cost-ex" type="number" min="0" step="0.1" value="1" /></label>
+          </section>
+
+          <div class="settings-footer">
+            <span class="north-marker" aria-hidden="true">N <i>↑</i></span>
+            <span>METRES · EAST / NORTH / UP</span>
+          </div>
+        </aside>
+
+        <section class="panel plan-panel" aria-labelledby="plan-title">
+          <div class="panel-heading">
+            <span class="step">02</span>
+            <div><h1 id="plan-title">Route plan</h1><p>Choose endpoints and shape a cubic Bézier</p></div>
+          </div>
+
+          <div class="endpoint-bar">
+            <button class="endpoint-select" id="set-a" type="button" aria-pressed="false"><span class="endpoint-dot a-dot">A</span><span><b>Start</b><small>index <strong id="a-index">—</strong></small></span><i id="a-coords">—</i></button>
+            <button class="endpoint-select" id="set-b" type="button" aria-pressed="false"><span class="endpoint-dot b-dot">B</span><span><b>End</b><small>index <strong id="b-index">—</strong></small></span><i id="b-coords">—</i></button>
+          </div>
+
+          <div class="map-toolbar">
+            <span id="map-instruction">Drag A / B to move endpoints, or P1 / P2 to shape the curve.</span>
+            <button id="reset-curve" class="quiet-button" type="button">Reset curve</button>
+          </div>
+          <div class="map-wrap">
+            <canvas id="map-canvas" aria-label="Terrain top view. Select an endpoint or drag either Bézier control point."></canvas>
+            <div class="map-north" aria-hidden="true">N <span>↑</span></div>
+            <div class="map-legend"><i></i><span>LOW</span><i class="legend-high"></i><span>HIGH</span><span class="legend-sep"></span><b>ROAD</b></div>
+          </div>
+
+          <div class="plan-footer">
+            <div class="plan-meta"><span><b id="vertex-count">—</b> OUTPUT VERTICES</span><span id="plan-status" role="status">Preparing route…</span></div>
+            <div class="plan-actions">
+              <button id="solve-road" class="primary-button" type="button">Solve <span>↗</span></button>
+              <button id="export-json" class="secondary-button" type="button">Export problem 1 JSON <span>↓</span></button>
+              <button id="import-solution" class="secondary-button" type="button" title="Choose a solution JSON and, optionally, its input and cost report JSON files">Import solution <span>↙</span></button>
+              <input id="solution-files" type="file" accept=".json,application/json" multiple hidden />
+            </div>
+          </div>
+        </section>
+
+        <section class="panel preview-panel" aria-labelledby="preview-title">
+          <div class="panel-heading">
+            <span class="step">03</span>
+            <div><h1 id="preview-title">3D solution</h1><p id="preview-subtitle">Select a route and solve its height field</p></div>
+            <span id="preview-state" class="preview-state">TERRAIN</span>
+          </div>
+          <div class="scene-wrap">
+            <div id="scene-host" aria-label="Three-dimensional terrain and solved road"></div>
+            <fieldset id="surface-selector" class="surface-selector" hidden>
+              <legend>3D SURFACE</legend>
+              <label><input id="surface-original" type="radio" name="solution-surface" value="original" /> Original surface</label>
+              <label><input id="surface-solution" type="radio" name="solution-surface" value="solution" checked /> Solution surface</label>
+            </fieldset>
+            <div id="scene-loading" class="scene-message"><span class="spinner"></span> Loading terrain model</div>
+            <div id="scene-error" class="scene-message error-message" hidden>Terrain could not be loaded.</div>
+            <div class="scene-caption"><span><i></i><b id="scene-terrain-name">FLAT FIELD</b></span><span id="scene-size">99 × 99 M</span></div>
+            <div class="scene-help">DRAG TO ORBIT <span>·</span> SCROLL TO ZOOM</div>
+          </div>
+          <div class="preview-footer">
+            <div id="default-preview-legend" class="preview-legend">
+              <span><i class="terrain-key"></i> ORIGINAL TERRAIN</span>
+              <span class="preview-note">Solve from pane 02 to show the road</span>
+            </div>
+            <div id="solution-legend" class="preview-legend solution-legend" hidden>
+              <span><i id="original-surface-key" class="original-key"></i> ORIGINAL SURFACE</span><span><i id="solution-surface-key" class="terrain-key"></i> SOLUTION SURFACE</span><span><i class="road-key"></i> SOLUTION ROAD</span>
+            </div>
+            <div id="solution-stats" class="solution-stats" hidden>
+              <div><small>TOTAL COST</small><strong id="solution-cost">—</strong></div>
+              <div><small>LENGTH</small><strong id="solution-length">—</strong></div>
+              <div><small>CUT / FILL · M³</small><strong id="solution-cut-fill">—</strong></div>
+              <div><small>IMPORT / EXPORT · M³</small><strong id="solution-import-export">—</strong></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
