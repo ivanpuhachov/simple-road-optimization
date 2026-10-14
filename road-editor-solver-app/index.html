@@ -105,6 +105,10 @@
               <label><input id="surface-original" type="radio" name="solution-surface" value="original" /> Original surface</label>
               <label><input id="surface-solution" type="radio" name="solution-surface" value="solution" checked /> Solution surface</label>
             </fieldset>
+            <div class="scene-projection" role="group" aria-label="Camera projection">
+              <button id="perspective-mode" type="button" aria-pressed="true">Perspective</button>
+              <button id="orthographic-mode" type="button" aria-pressed="false">Orthographic</button>
+            </div>
             <div id="scene-loading" class="scene-message"><span class="spinner"></span> Loading terrain model</div>
             <div id="scene-error" class="scene-message error-message" hidden>Terrain could not be loaded.</div>
             <div class="scene-caption"><span><i></i><b id="scene-terrain-name">FLAT FIELD</b></span><span id="scene-size">99 × 99 M</span></div>

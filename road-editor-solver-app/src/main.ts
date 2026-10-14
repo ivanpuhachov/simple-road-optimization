@@ -82,8 +82,9 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color('#182421');
 scene.fog = new THREE.Fog('#182421', 180, 420);
 
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1200);
+let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 1200);
 camera.up.set(0, 0, 1);
+let projectionMode: 'perspective' | 'orthographic' = 'perspective';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -95,12 +96,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 sceneHost.prepend(renderer.domElement);
 renderer.domElement.setAttribute('aria-label', 'Three dimensional terrain and solved road. Drag to rotate and scroll to zoom.');
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.07;
-controls.minDistance = 55;
-controls.maxDistance = 360;
-controls.maxPolarAngle = Math.PI;
+let controls = createOrbitControls(camera);
 controls.target.set(49.5, 49.5, 0);
 
 scene.add(new THREE.HemisphereLight('#eff1d7', '#30433b', 2.2));
@@ -139,6 +135,8 @@ let sceneTerrainKey = '';
 let terrainMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> | null = null;
 let roadMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null = null;
 let comparisonTerrainLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null;
+const referenceAxes = new THREE.Group();
+scene.add(referenceAxes);
 let solutionImported = false;
 let solutionOriginalTerrain: TerrainFile | null = null;
 let solutionSolvedTerrain: TerrainFile | null = null;
@@ -581,6 +579,120 @@ function disposeMesh<TGeometry extends THREE.BufferGeometry, TMaterial extends T
   mesh.material.dispose();
 }
 
+function createOrbitControls(activeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera): OrbitControls {
+  const orbit = new OrbitControls(activeCamera, renderer.domElement);
+  orbit.enableDamping = true;
+  orbit.dampingFactor = 0.07;
+  orbit.minDistance = 55;
+  orbit.maxDistance = 360;
+  orbit.minZoom = 0.5;
+  orbit.maxZoom = 5;
+  orbit.maxPolarAngle = Math.PI;
+  return orbit;
+}
+
+function setOrthographicHalfHeight(halfHeight: number): void {
+  if (!(camera instanceof THREE.OrthographicCamera)) return;
+  const aspect = sceneHost.clientWidth / Math.max(sceneHost.clientHeight, 1);
+  camera.left = -halfHeight * aspect;
+  camera.right = halfHeight * aspect;
+  camera.top = halfHeight;
+  camera.bottom = -halfHeight;
+}
+
+function setProjection(mode: 'perspective' | 'orthographic'): void {
+  if (projectionMode === mode) return;
+  controls.update();
+
+  const target = controls.target.clone();
+  const previousPosition = camera.position.clone();
+  const viewOffset = previousPosition.clone().sub(target);
+  const viewDistance = viewOffset.length();
+  const up = camera.up.clone();
+  const near = camera.near;
+  const far = camera.far;
+  const aspect = sceneHost.clientWidth / Math.max(sceneHost.clientHeight, 1);
+  let nextCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+
+  if (mode === 'orthographic') {
+    const halfHeight = camera instanceof THREE.PerspectiveCamera
+      ? viewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))
+      : (camera.top - camera.bottom) / (2 * camera.zoom);
+    nextCamera = new THREE.OrthographicCamera(-halfHeight * aspect, halfHeight * aspect, halfHeight, -halfHeight, near, far);
+    nextCamera.position.copy(previousPosition);
+  } else {
+    const visibleHalfHeight = camera instanceof THREE.OrthographicCamera
+      ? (camera.top - camera.bottom) / (2 * camera.zoom)
+      : viewDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const perspectiveDistance = visibleHalfHeight / Math.tan(THREE.MathUtils.degToRad(19));
+    nextCamera = new THREE.PerspectiveCamera(38, aspect, near, far);
+    nextCamera.position.copy(target).addScaledVector(viewOffset.normalize(), perspectiveDistance);
+  }
+
+  nextCamera.up.copy(up);
+  nextCamera.lookAt(target);
+  controls.dispose();
+  camera = nextCamera;
+  controls = createOrbitControls(camera);
+  controls.target.copy(target);
+  controls.update();
+  projectionMode = mode;
+  document.querySelector<HTMLButtonElement>('#perspective-mode')!.setAttribute('aria-pressed', String(mode === 'perspective'));
+  document.querySelector<HTMLButtonElement>('#orthographic-mode')!.setAttribute('aria-pressed', String(mode === 'orthographic'));
+  resizeRenderer();
+}
+
+function clearReferenceAxes(): void {
+  for (const child of [...referenceAxes.children]) {
+    referenceAxes.remove(child);
+    child.traverse((object) => {
+      const renderable = object as THREE.Mesh | THREE.Line;
+      if ('geometry' in renderable && renderable.geometry) renderable.geometry.dispose();
+      if ('material' in renderable && renderable.material) {
+        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        for (const material of materials) material.dispose();
+      }
+    });
+  }
+}
+
+function updateReferenceAxes(data: TerrainFile): void {
+  clearReferenceAxes();
+  const { origin_m: origin, cell_size_m: cell, width, height, heights } = data.heightmap;
+  const start = new THREE.Vector3(origin[0], origin[1], heights[0] + 0.06);
+  const xLength = Math.min(30, (width - 1) * cell[0] * 0.34);
+  const yLength = Math.min(30, (height - 1) * cell[1] * 0.34);
+  const zLength = Math.max(18, Math.min(32, Math.max(...heights) - Math.min(...heights) + 8));
+
+  const addArrow = (direction: THREE.Vector3, color: string, length: number): void => {
+    const arrow = new THREE.ArrowHelper(direction, start, length, color, Math.min(4, length * 0.17), 2.2);
+    arrow.line.material.depthTest = false;
+    arrow.line.material.depthWrite = false;
+    arrow.line.material.transparent = true;
+    arrow.line.material.opacity = 0.88;
+    arrow.cone.material.depthTest = false;
+    arrow.cone.material.depthWrite = false;
+    arrow.cone.material.transparent = true;
+    arrow.cone.material.opacity = 0.94;
+    arrow.renderOrder = 10;
+    arrow.line.renderOrder = 10;
+    arrow.cone.renderOrder = 10;
+    referenceAxes.add(arrow);
+  };
+
+  addArrow(new THREE.Vector3(1, 0, 0), '#ee827c', xLength);
+  addArrow(new THREE.Vector3(0, 1, 0), '#89c08c', yLength);
+  addArrow(new THREE.Vector3(0, 0, 1), '#83b5e3', zLength);
+
+  const originMarker = new THREE.Mesh(
+    new THREE.RingGeometry(0.8, 1.4, 32),
+    new THREE.MeshBasicMaterial({ color: '#f2e2b7', side: THREE.DoubleSide, depthTest: false, depthWrite: false }),
+  );
+  originMarker.position.copy(start);
+  originMarker.renderOrder = 11;
+  referenceAxes.add(originMarker);
+}
+
 function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
   const map = data.heightmap;
   const min = Math.min(...map.heights);
@@ -626,6 +738,7 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
   disposeMesh(terrainMesh);
   terrainMesh = mesh;
   scene.add(mesh);
+  updateReferenceAxes(data);
   sceneTerrainKey = currentTerrainKey;
 
   document.querySelector('#scene-terrain-name')!.textContent = (terrainTitles[currentTerrainKey] || currentTerrainKey).toUpperCase();
@@ -638,9 +751,15 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
     const centerZ = (min + max) / 2;
     const distance = Math.max((map.width - 1) * map.cell_size_m[0], (map.height - 1) * map.cell_size_m[1]) * 1.72;
     controls.target.set(centerX, centerY, centerZ);
+    camera.up.set(0, 0, 1);
     camera.position.set(centerX + distance * 0.78, centerY - distance * 0.95, centerZ + distance * 0.86);
     camera.near = Math.max(0.1, distance / 1000);
     camera.far = distance * 12;
+    controls.maxDistance = Math.max(360, distance * 1.5);
+    if (camera instanceof THREE.OrthographicCamera) {
+      setOrthographicHalfHeight(camera.position.distanceTo(controls.target) * Math.tan(THREE.MathUtils.degToRad(19)));
+      camera.zoom = 1;
+    }
     camera.updateProjectionMatrix();
     controls.update();
   }
@@ -653,15 +772,21 @@ function resetTopView(data: TerrainFile): void {
   const centerX = map.origin_m[0] + width / 2;
   const centerY = map.origin_m[1] + height / 2;
   const centerZ = (Math.min(...map.heights) + Math.max(...map.heights)) / 2;
-  const halfVerticalFov = THREE.MathUtils.degToRad(camera.fov) / 2;
-  const distance = 1.15 * Math.max(height, width / camera.aspect)
-    / (2 * Math.tan(halfVerticalFov));
+  const aspect = sceneHost.clientWidth / Math.max(sceneHost.clientHeight, 1);
+  const distance = camera instanceof THREE.PerspectiveCamera
+    ? 1.15 * Math.max(height, width / aspect) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)))
+    : Math.max(height, width / aspect) * 1.15;
 
   controls.target.set(centerX, centerY, centerZ);
   // A slight southern offset keeps north at the top while avoiding a singular look direction.
+  camera.up.set(0, 0, 1);
   camera.position.set(centerX, centerY - distance * 0.005, centerZ + distance);
   camera.near = Math.max(0.1, distance / 1000);
   camera.far = distance * 12;
+  if (camera instanceof THREE.OrthographicCamera) {
+    setOrthographicHalfHeight(Math.max(height, width / aspect) * 0.575);
+    camera.zoom = 1;
+  }
   camera.updateProjectionMatrix();
   controls.maxDistance = Math.max(360, distance * 1.5);
   if (scene.fog instanceof THREE.Fog) scene.fog.far = Math.max(420, distance * 2.5);
@@ -1290,9 +1415,19 @@ function resizeRenderer(): void {
   const height = sceneHost.clientHeight;
   if (width < 1 || height < 1) return;
   renderer.setSize(width, height, false);
-  camera.aspect = width / height;
+  const aspect = width / height;
+  if (camera instanceof THREE.PerspectiveCamera) {
+    camera.aspect = aspect;
+  } else {
+    const halfHeight = (camera.top - camera.bottom) / 2;
+    camera.left = -halfHeight * aspect;
+    camera.right = halfHeight * aspect;
+  }
   camera.updateProjectionMatrix();
 }
+
+document.querySelector<HTMLButtonElement>('#perspective-mode')!.addEventListener('click', () => setProjection('perspective'));
+document.querySelector<HTMLButtonElement>('#orthographic-mode')!.addEventListener('click', () => setProjection('orthographic'));
 
 new ResizeObserver(() => {
   resizeRenderer();
