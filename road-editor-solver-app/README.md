@@ -7,12 +7,7 @@ It displays the displaced road and graded terrain, then resets the 3D camera to
 a north-up top view. The app retains the 2D editor's terrain choices, endpoint
 controls, cost inputs, JSON export/import, and 3D terrain comparison.
 
-The **Curve sample spacing** control sets the maximum distance between adjacent
-road vertices along the Bézier curve. The default is 3 m; smaller spacing creates
-more optimization variables and can take longer, especially for the 2D search.
-It is separate from the solver's 0.25 m earthwork quadrature step. The app
-limits a route to 200 segments. The 2D solver uses its default 3 m lateral
-offset bound and a budget of 60 candidate evaluations.
+The **Route detail** block has separate controls for curve sample spacing and points that can be displaced. Curve sample spacing is the target gap between road vertices along the Bézier curve. It defaults to 3 m and is separate from the solver's 0.25 m earthwork quadrature step. The app limits a route to 200 segments. Points that can be displaced selects interior vertices spread across the route for independent sideways offsets in the Problem 2 search. The other sampled vertices follow by linear interpolation along the route. This keeps the detailed elevation profile while reducing the number of horizontal search variables. The default is 5 move points. The app uses at most $\min(60,8+4k)$ search candidate evaluations for $k$ move points, and the 2D solver uses a 3 m lateral offset bound. The help button in the block explains both controls.
 
 ## Run locally
 

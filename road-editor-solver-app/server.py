@@ -61,12 +61,17 @@ def _run_solver(document: dict[str, Any], displacement: bool) -> dict[str, Any]:
                 json.dumps(document, allow_nan=False), encoding="utf-8"
             )
             if displacement:
+                problem2 = document.get("problem2")
+                controls = problem2.get("control_indices") if isinstance(problem2, dict) else None
+                move_count = len(controls) if isinstance(controls, list) else (
+                    max(0, len(curve) - 2) if isinstance(curve, list) else 0
+                )
                 result = solve_problem2(
                     input_path,
                     output_path,
                     report_path,
                     max_offset_m=None,
-                    max_evaluations=60,
+                    max_evaluations=min(60, 8 + 4 * move_count),
                     initial_move_m=1.0,
                     min_move_m=0.05,
                     seed=0,

@@ -23,6 +23,7 @@ type RoadDocument = {
   terrain: TerrainFile;
   constraints: { w: number; maxs: number; maxc: number };
   costs: { rb: number; ed: number; ef: number; ei: number; ex: number };
+  problem2?: { control_indices: number[] };
 };
 type CostReport = {
   status: string;
@@ -68,6 +69,9 @@ const endpointAButton = document.querySelector<HTMLButtonElement>('#set-a')!;
 const endpointBButton = document.querySelector<HTMLButtonElement>('#set-b')!;
 const widthInput = document.querySelector<HTMLInputElement>('#width')!;
 const sampleSpacingInput = document.querySelector<HTMLInputElement>('#sample-spacing')!;
+const movablePointsSelect = document.querySelector<HTMLSelectElement>('#movable-points')!;
+const routeDetailSummary = document.querySelector<HTMLParagraphElement>('#route-detail-summary')!;
+const routeDetailDialog = document.querySelector<HTMLDialogElement>('#route-detail-dialog')!;
 const previewState = document.querySelector<HTMLSpanElement>('#preview-state')!;
 const originalTerrainLegend = document.querySelector<HTMLDivElement>('#solution-legend')!;
 const defaultPreviewLegend = document.querySelector<HTMLDivElement>('#default-preview-legend')!;
@@ -122,6 +126,14 @@ const terrainColors = [
   { at: 0.88, color: new THREE.Color('#d1b58b') },
   { at: 1, color: new THREE.Color('#eee0bd') },
 ];
+const solutionTerrainColors = [
+  { at: 0, color: new THREE.Color('#35566f') },
+  { at: 0.16, color: new THREE.Color('#4d7289') },
+  { at: 0.42, color: new THREE.Color('#7397a4') },
+  { at: 0.68, color: new THREE.Color('#9cb8bb') },
+  { at: 0.88, color: new THREE.Color('#c6d3cd') },
+  { at: 1, color: new THREE.Color('#e2e8d9') },
+];
 
 let currentData: TerrainFile | null = null;
 let currentTerrainKey = 'flat';
@@ -152,17 +164,17 @@ let terrainLoading = false;
 
 const MAX_CURVE_SEGMENTS = 200;
 
-function colorAt(normalizedHeight: number): THREE.Color {
+function colorAt(normalizedHeight: number, palette = terrainColors): THREE.Color {
   const value = THREE.MathUtils.clamp(normalizedHeight, 0, 1);
-  for (let index = 1; index < terrainColors.length; index += 1) {
-    const upper = terrainColors[index];
+  for (let index = 1; index < palette.length; index += 1) {
+    const upper = palette[index];
     if (value <= upper.at) {
-      const lower = terrainColors[index - 1];
+      const lower = palette[index - 1];
       const local = (value - lower.at) / (upper.at - lower.at);
       return lower.color.clone().lerp(upper.color, local);
     }
   }
-  return terrainColors[terrainColors.length - 1].color.clone();
+  return palette[palette.length - 1].color.clone();
 }
 
 function pointForIndex(index: number): Point2 {
@@ -248,6 +260,15 @@ function sampleBezier(): Point2[] {
   const spacing = Number.isFinite(rawSpacing) && rawSpacing > 0 ? rawSpacing : 3;
   const count = Math.min(desiredBezierSegments(spacing), MAX_CURVE_SEGMENTS);
   return Array.from({ length: count + 1 }, (_, index) => bezierAt(index / count));
+}
+
+function moveControlIndices(vertexCount: number): number[] {
+  const interiorCount = Math.max(0, vertexCount - 2);
+  const requested = movablePointsSelect.value === 'all'
+    ? interiorCount : Number(movablePointsSelect.value);
+  const count = Math.min(interiorCount, requested);
+  return Array.from({ length: count }, (_, index) =>
+    Math.round((index + 1) * (interiorCount + 1) / (count + 1)));
 }
 
 function getMapFrame(): MapFrame {
@@ -365,6 +386,11 @@ function drawMap(): void {
   }
 
   const route = importedSolutionPlan || sampleBezier();
+  const moveIndices = moveControlIndices(route.length);
+  const moveCount = moveIndices.length;
+  routeDetailSummary.textContent = route.length + ' road vertices · '
+    + moveCount + ' move ' + (moveCount === 1 ? 'point' : 'points')
+    + ' · up to ' + Math.min(60, 8 + 4 * moveCount) + ' search trials';
   const curve = route.map((point) => toCanvas(point, frame));
   mapContext.beginPath();
   curve.forEach((point, index) => {
@@ -379,6 +405,19 @@ function drawMap(): void {
   mapContext.strokeStyle = '#617a53';
   mapContext.lineWidth = 2;
   mapContext.stroke();
+
+  if (!importedSolutionPlan && moveCount < route.length - 2) {
+    for (const index of moveIndices) {
+      const point = curve[index];
+      mapContext.beginPath();
+      mapContext.arc(point.x, point.y, 3.5, 0, Math.PI * 2);
+      mapContext.fillStyle = '#f8f7ef';
+      mapContext.fill();
+      mapContext.lineWidth = 1.5;
+      mapContext.strokeStyle = '#476447';
+      mapContext.stroke();
+    }
+  }
 
   if (!importedSolutionPlan) {
     drawHandle(firstHandle, 'P1');
@@ -663,8 +702,8 @@ function clearReferenceAxes(): void {
 
 function updateReferenceAxes(data: TerrainFile): void {
   clearReferenceAxes();
-  const { origin_m: origin, cell_size_m: cell, width, height, heights } = data.heightmap;
-  const start = new THREE.Vector3(origin[0], origin[1], heights[0] + 0.06);
+  const { cell_size_m: cell, width, height, heights } = data.heightmap;
+  const start = new THREE.Vector3(0, 0, 0);
   const xLength = Math.min(30, (width - 1) * cell[0] * 0.34);
   const yLength = Math.min(30, (height - 1) * cell[1] * 0.34);
   const zLength = Math.max(18, Math.min(32, Math.max(...heights) - Math.min(...heights) + 8));
@@ -702,7 +741,7 @@ function updateReferenceAxes(data: TerrainFile): void {
   referenceAxes.add(originMarker);
 }
 
-function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
+function buildTerrain(data: TerrainFile, resetCamera: boolean, surface: 'terrain' | 'original' | 'solution' = 'terrain'): void {
   const map = data.heightmap;
   const min = Math.min(...map.heights);
   const max = Math.max(...map.heights);
@@ -710,6 +749,7 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
   const positions = new Float32Array(map.width * map.height * 3);
   const colors = new Float32Array(map.width * map.height * 3);
   const indices: number[] = [];
+  const palette = surface === 'solution' ? solutionTerrainColors : terrainColors;
 
   for (let j = 0; j < map.height; j += 1) {
     for (let i = 0; i < map.width; i += 1) {
@@ -718,7 +758,7 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
       positions[vertex * 3] = map.origin_m[0] + i * map.cell_size_m[0];
       positions[vertex * 3 + 1] = map.origin_m[1] + j * map.cell_size_m[1];
       positions[vertex * 3 + 2] = elevation;
-      const color = colorAt((elevation - min) / range);
+      const color = colorAt((elevation - min) / range, palette);
       colors[vertex * 3] = color.r;
       colors[vertex * 3 + 1] = color.g;
       colors[vertex * 3 + 2] = color.b;
@@ -806,7 +846,7 @@ function resetTopView(data: TerrainFile): void {
   controls.enableDamping = true;
 }
 
-function makeTerrainLines(data: TerrainFile): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
+function makeTerrainLines(data: TerrainFile, color = '#dfc99d'): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
   const map = data.heightmap;
   const points: number[] = [];
   const zOffset = 0.06;
@@ -832,7 +872,7 @@ function makeTerrainLines(data: TerrainFile): THREE.LineSegments<THREE.BufferGeo
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
   const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
-    color: '#dfc99d',
+    color,
     transparent: true,
     opacity: 0.78,
     depthTest: false,
@@ -898,6 +938,7 @@ function clearSolutionOverlay(): void {
   solutionSolvedTerrain = null;
   importedSolutionPlan = null;
   surfaceSelector.hidden = true;
+  surfaceSelector.dataset.surface = 'solution';
   solutionSurfaceRadio.checked = true;
   originalSurfaceKey.className = 'original-key';
   solutionSurfaceKey.className = 'terrain-key';
@@ -912,23 +953,26 @@ function updateSolutionSurface(): void {
   const showOriginal = originalSurfaceRadio.checked;
   const primary = showOriginal ? solutionOriginalTerrain : solutionSolvedTerrain;
   const comparison = showOriginal ? solutionSolvedTerrain : solutionOriginalTerrain;
-  buildTerrain(primary, false);
+  buildTerrain(primary, false, showOriginal ? 'original' : 'solution');
   sceneTerrainKey = solutionOriginalTerrain.terrain.type;
   if (comparisonTerrainLines) {
     scene.remove(comparisonTerrainLines);
     comparisonTerrainLines.geometry.dispose();
     comparisonTerrainLines.material.dispose();
   }
-  comparisonTerrainLines = makeTerrainLines(comparison);
+  comparisonTerrainLines = makeTerrainLines(comparison, showOriginal ? '#86c0d1' : '#dfc99d');
   scene.add(comparisonTerrainLines);
+  surfaceSelector.dataset.surface = showOriginal ? 'original' : 'solution';
   const terrainKey = solutionOriginalTerrain.terrain.type;
   const terrainName = terrainTitles[terrainKey] || solutionOriginalTerrain.terrain.description || terrainKey;
   document.querySelector('#scene-terrain-name')!.textContent = terrainName.toUpperCase()
     + (showOriginal ? ' · ORIGINAL' : ' · SOLUTION');
   previewState.textContent = roadDirty ? 'SOLUTION STALE' : showOriginal ? 'ORIGINAL' : 'SOLUTION';
-  previewState.className = roadDirty ? 'preview-state stale' : 'preview-state ready';
-  originalSurfaceKey.className = showOriginal ? 'terrain-key' : 'original-key';
-  solutionSurfaceKey.className = showOriginal ? 'original-key' : 'terrain-key';
+  previewState.className = roadDirty
+    ? 'preview-state stale'
+    : showOriginal ? 'preview-state original' : 'preview-state solution';
+  originalSurfaceKey.className = showOriginal ? 'original-terrain-key' : 'original-key';
+  solutionSurfaceKey.className = showOriginal ? 'solution-key' : 'solution-terrain-key';
 }
 
 originalSurfaceRadio.addEventListener('change', updateSolutionSurface);
@@ -1102,7 +1146,8 @@ function displaySolution(
   originalSurfaceRadio.checked = false;
   solutionSurfaceRadio.checked = true;
   surfaceSelector.hidden = false;
-  buildTerrain(solution.terrain, false);
+  surfaceSelector.dataset.surface = 'solution';
+  buildTerrain(solution.terrain, false, 'solution');
   comparisonTerrainLines = makeTerrainLines(oldTerrain);
   scene.add(comparisonTerrainLines);
   roadMesh = makeSolutionRoad(solution.curve, solution.constraints.w);
@@ -1117,7 +1162,9 @@ function displaySolution(
   const terrainName = terrainTitles[terrainKey] || oldTerrain.terrain.description || terrainKey;
   document.querySelector('#scene-terrain-name')!.textContent = terrainName.toUpperCase() + ' · SOLUTION';
   previewState.textContent = 'SOLUTION';
-  previewState.className = 'preview-state ready';
+  previewState.className = 'preview-state solution';
+  originalSurfaceKey.className = 'original-key';
+  solutionSurfaceKey.className = 'solution-terrain-key';
   planStatus.textContent = message + ' · ' + solution.curve.length + ' vertices';
   solutionStats.hidden = true;
   if (report) {
@@ -1229,6 +1276,7 @@ function buildExportDocument(): RoadDocument {
       maxc: requiredNumber('max-curvature', 'Maximum curvature', 0),
     },
     costs,
+    problem2: { control_indices: moveControlIndices(curve.length) },
   };
 }
 
@@ -1270,6 +1318,10 @@ async function solveRoad(displacement: boolean): Promise<void> {
   }
 
   const version = editVersion;
+  if (displacement && road.curve.length < 3) {
+    planStatus.textContent = '2D solve needs at least one interior road vertex';
+    return;
+  }
   solving = true;
   solveButton.disabled = true;
   solve2dButton.disabled = true;
@@ -1281,8 +1333,10 @@ async function solveRoad(displacement: boolean): Promise<void> {
   sceneLoading.hidden = false;
   previewState.textContent = 'SOLVING';
   previewState.className = 'preview-state';
-  planStatus.textContent = (displacement ? 'Searching 2D positions for ' : 'Optimizing ')
-    + road.curve.length + ' road vertices…';
+  planStatus.textContent = displacement
+    ? 'Searching ' + road.problem2!.control_indices.length + ' independent move points across '
+      + road.curve.length + ' road vertices…'
+    : 'Optimizing ' + road.curve.length + ' road vertices…';
 
   try {
     const response = await fetch(displacement ? '/api/solve-2d' : '/api/solve', {
@@ -1416,6 +1470,15 @@ widthInput.addEventListener('input', () => {
 });
 sampleSpacingInput.addEventListener('input', () => {
   setDirty('Curve sampling changed · press Solve again', true);
+});
+movablePointsSelect.addEventListener('change', () => {
+  setDirty('2D move points changed · press Solve again');
+});
+document.querySelector<HTMLButtonElement>('#route-detail-help')!.addEventListener('click', () => {
+  routeDetailDialog.showModal();
+});
+document.querySelector<HTMLButtonElement>('#close-route-detail-help')!.addEventListener('click', () => {
+  routeDetailDialog.close();
 });
 for (const id of ['max-grade', 'max-curvature', 'cost-rb', 'cost-ed', 'cost-ef', 'cost-ei', 'cost-ex']) {
   document.querySelector<HTMLInputElement>('#' + id)!.addEventListener('input', () => {

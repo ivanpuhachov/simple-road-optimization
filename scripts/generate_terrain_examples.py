@@ -105,7 +105,7 @@ def make_diagonal_ridge_heights(
     peak_height_m: float = RIDGE_PEAK_M,
     sigma_m: float = RIDGE_SIGMA_M,
 ) -> list[float]:
-    """Convolve a Gaussian hill along the southwest-to-northeast diagonal.
+    """Convolve a Gaussian hill along the northwest-to-southeast diagonal.
 
     The line integral has a Gaussian cross section and smoothly rounded ends.
     Its sampled peak is normalized to ``peak_height_m``.
@@ -116,14 +116,17 @@ def make_diagonal_ridge_heights(
         raise ValueError("Ridge peak height must be nonnegative")
 
     sqrt_two = math.sqrt(2.0)
-    line_length = math.sqrt(2.0) * (GRID_SIZE - 1) * CELL_SIZE_M
+    grid_extent = (GRID_SIZE - 1) * CELL_SIZE_M
+    line_length = math.sqrt(2.0) * grid_extent
     heights: list[float] = []
     for j in range(GRID_SIZE):
         y = ORIGIN_M[1] + j * CELL_SIZE_M
         for i in range(GRID_SIZE):
             x = ORIGIN_M[0] + i * CELL_SIZE_M
-            along = (x + y) / sqrt_two
-            across = (y - x) / sqrt_two
+            local_x = x - ORIGIN_M[0]
+            local_y = y - ORIGIN_M[1]
+            along = (local_x - local_y + grid_extent) / sqrt_two
+            across = (local_x + local_y - grid_extent) / sqrt_two
             end_integral = math.erf((line_length - along) / (sqrt_two * sigma_m))
             end_integral += math.erf(along / (sqrt_two * sigma_m))
             value = (
@@ -392,12 +395,12 @@ def main() -> None:
     write_example(
         args.output_dir,
         "diagonal_ridge",
-        "A Gaussian hill convolved along the southwest-to-northeast diagonal.",
+        "A Gaussian hill convolved along the northwest-to-southeast diagonal.",
         make_diagonal_ridge_heights(args.ridge_height, args.ridge_sigma),
         {
             "peak_height_m": args.ridge_height,
             "gaussian_sigma_m": args.ridge_sigma,
-            "path": "southwest to northeast diagonal",
+            "path": "northwest to southeast diagonal",
         },
     )
     write_example(

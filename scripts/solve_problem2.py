@@ -4,9 +4,11 @@
 Run with:
     uv run python scripts/solve_problem2.py data/problem1-road-input.json
 
-The optional input field problem2.offset_bounds_m contains one [lower, upper]
-pair for each interior curve vertex. Without that field, all interior vertices
-use the symmetric --max-offset-m bound (3 m by default).
+The optional problem2.control_indices field selects independent interior
+offsets. Other vertex offsets are interpolated between them. The optional
+problem2.offset_bounds_m field contains one [lower, upper] pair per control
+point. Without it, each control uses the symmetric --max-offset-m bound
+(3 m by default).
 """
 
 from __future__ import annotations
@@ -86,7 +88,7 @@ def report_path_for(output_path: Path) -> Path:
 
 def read_offset_bounds(
     document: Mapping[str, Any],
-    interior_count: int,
+    control_count: int,
     cli_max_offset_m: float | None,
 ) -> tuple[np.ndarray, np.ndarray, str]:
     raw_problem2 = document.get("problem2", {})
@@ -97,10 +99,10 @@ def read_offset_bounds(
         source = "--max-offset-m"
     elif "offset_bounds_m" in raw_problem2:
         pairs = raw_problem2["offset_bounds_m"]
-        if not isinstance(pairs, list) or len(pairs) != interior_count:
+        if not isinstance(pairs, list) or len(pairs) != control_count:
             raise ValueError(
                 "problem2.offset_bounds_m must have one [lower, upper] pair "
-                "for each interior curve vertex"
+                "for each displacement control point"
             )
         lower: list[float] = []
         upper: list[float] = []
@@ -123,10 +125,41 @@ def read_offset_bounds(
     if maximum < 0:
         raise ValueError("maximum offset must be nonnegative")
     return (
-        np.full(interior_count, -maximum),
-        np.full(interior_count, maximum),
+        np.full(control_count, -maximum),
+        np.full(control_count, maximum),
         source,
     )
+
+
+def read_control_indices(document: Mapping[str, Any], interior_count: int) -> np.ndarray:
+    raw_problem2 = document.get("problem2", {})
+    if not isinstance(raw_problem2, Mapping):
+        raise ValueError("problem2 must be an object")
+    if "control_indices" not in raw_problem2:
+        return np.arange(1, interior_count + 1, dtype=np.intp)
+    raw_indices = raw_problem2["control_indices"]
+    if not isinstance(raw_indices, list) or not raw_indices:
+        raise ValueError("problem2.control_indices must be a nonempty list")
+    previous = 0
+    for index in raw_indices:
+        if type(index) is not int or index <= previous or index > interior_count:
+            raise ValueError(
+                "problem2.control_indices must be increasing interior vertex indices"
+            )
+        previous = index
+    return np.asarray(raw_indices, dtype=np.intp)
+
+
+def build_offset_basis(baseline: np.ndarray, control_indices: np.ndarray) -> np.ndarray:
+    lengths = np.linalg.norm(np.diff(baseline[:, :2], axis=0), axis=1)
+    station = np.concatenate(([0.0], np.cumsum(lengths)))
+    knots = station[np.concatenate(([0], control_indices, [len(baseline) - 1]))]
+    basis = np.zeros((len(baseline) - 2, len(control_indices)), dtype=np.float64)
+    for column in range(len(control_indices)):
+        values = np.zeros(len(knots), dtype=np.float64)
+        values[column + 1] = 1.0
+        basis[:, column] = np.interp(station[1:-1], knots, values)
+    return basis
 
 
 @dataclass
@@ -150,6 +183,7 @@ class CandidateEvaluator:
         self,
         baseline: np.ndarray,
         baseline_normals: np.ndarray,
+        control_indices: np.ndarray,
         heightmap: Heightmap,
         terrain_document: Mapping[str, Any],
         constraints: Mapping[str, float],
@@ -163,6 +197,8 @@ class CandidateEvaluator:
     ) -> None:
         self.baseline = baseline
         self.baseline_normals = baseline_normals
+        self.control_indices = control_indices
+        self.offset_basis = build_offset_basis(baseline, control_indices)
         self.heightmap = heightmap
         self.terrain_document = terrain_document
         self.constraints = constraints
@@ -192,7 +228,8 @@ class CandidateEvaluator:
         self.history.append(
             {
                 "evaluation": len(self.cache),
-                "offsets_m": offsets.tolist(),
+                "offsets_m": (self.offset_basis @ offsets).tolist(),
+                "control_offsets_m": offsets.tolist(),
                 "status": result.status,
                 "total_cost": result.cost if math.isfinite(result.cost) else None,
                 "reason": result.reason,
@@ -204,7 +241,8 @@ class CandidateEvaluator:
         self, offsets: np.ndarray, quadrature_step_m: float
     ) -> Candidate:
         curve = self.baseline.copy()
-        curve[1:-1, :2] += offsets[:, None] * self.baseline_normals[1:-1]
+        vertex_offsets = self.offset_basis @ offsets
+        curve[1:-1, :2] += vertex_offsets[:, None] * self.baseline_normals[1:-1]
         if not np.all(np.isfinite(curve)):
             return Candidate(offsets, "invalid_path", "candidate coordinates are not finite")
         lengths = np.linalg.norm(np.diff(curve[:, :2], axis=0), axis=1)
@@ -331,9 +369,13 @@ class CandidateEvaluator:
         )
 
 
-def search_directions(baseline: np.ndarray, seed: int) -> list[np.ndarray]:
+def search_directions(
+    baseline: np.ndarray, control_indices: np.ndarray, seed: int
+) -> list[np.ndarray]:
     segment_lengths = np.linalg.norm(np.diff(baseline[:, :2], axis=0), axis=1)
-    station = np.cumsum(segment_lengths)[:-1] / math.fsum(float(x) for x in segment_lengths)
+    station = np.cumsum(segment_lengths)[control_indices - 1] / math.fsum(
+        float(x) for x in segment_lengths
+    )
     directions: list[np.ndarray] = []
 
     def add(values: np.ndarray) -> None:
@@ -410,7 +452,9 @@ def search_offsets(
     min_move_m: float,
     seed: int,
 ) -> tuple[str, int, int]:
-    directions = search_directions(evaluator.baseline, seed)
+    directions = search_directions(
+        evaluator.baseline, evaluator.control_indices, seed
+    )
     current_offsets = np.zeros(len(lower), dtype=np.float64)
     current = evaluator.evaluate(current_offsets)
     if current is None:
@@ -538,8 +582,9 @@ def solve(
         raise ValueError("; ".join(endpoint_problems))
     with input_path.open(encoding="utf-8") as handle:
         document = json.load(handle)
+    control_indices = read_control_indices(document, len(vertices) - 2)
     lower, upper, bounds_source = read_offset_bounds(
-        document, len(vertices) - 2, max_offset_m
+        document, len(control_indices), max_offset_m
     )
     baseline = np.asarray(vertices, dtype=np.float64)
     try:
@@ -550,6 +595,7 @@ def solve(
     evaluator = CandidateEvaluator(
         baseline,
         baseline_normals,
+        control_indices,
         heightmap,
         terrain_document,
         constraints,
@@ -603,6 +649,9 @@ def solve(
         "method": "bounded pattern search with joint smooth directions",
         "bounds_source": bounds_source,
         "offset_bounds_m": np.column_stack((lower, upper)).tolist(),
+        "control_indices": control_indices.tolist(),
+        "sampled_interior_points": len(vertices) - 2,
+        "independent_move_points": len(control_indices),
         "baseline_normals_xy": baseline_normals.tolist(),
         "seed": seed,
         "initial_move_m": initial_move_m,
@@ -699,7 +748,9 @@ def solve(
         "input": str(input_path),
         "output": str(output_path),
         "vertices": len(chosen.curve),
-        "offsets_m": chosen.offsets.tolist(),
+        "offsets_m": (evaluator.offset_basis @ chosen.offsets).tolist(),
+        "control_offsets_m": chosen.offsets.tolist(),
+        "control_indices": control_indices.tolist(),
         "baseline": baseline_summary,
         "cost_change_from_baseline": chosen.cost - baseline_cost if baseline_cost is not None else None,
         "terrain_update": terrain_update,

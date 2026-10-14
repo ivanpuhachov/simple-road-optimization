@@ -40,9 +40,21 @@
             <label class="number-field"><span>Width <small>w · m</small></span><input id="width" type="number" min="0.01" step="0.5" value="5" /></label>
             <label class="number-field"><span>Max grade <small>maxs</small></span><input id="max-grade" type="number" min="0" step="0.01" value="0.1" /></label>
             <label class="number-field"><span>Max curvature <small>maxc · 1/m</small></span><input id="max-curvature" type="number" min="0" step="0.01" value="0.1" /></label>
-            <label class="number-field"><span>Curve sample spacing <small>m</small></span><input id="sample-spacing" type="number" min="1" max="20" step="0.5" value="3" /></label>
-            <p class="help">Maximum spacing between route vertices. Smaller values take longer to solve.</p>
           </section>
+
+          <section class="form-section route-detail-section">
+            <div class="section-title"><h2>Route detail</h2><button id="route-detail-help" class="help-trigger" type="button" aria-label="Help with route detail" aria-haspopup="dialog" aria-controls="route-detail-dialog">[?]</button></div>
+            <label class="number-field"><span>Curve sample spacing <small>m</small></span><input id="sample-spacing" type="number" min="1" max="20" step="0.5" value="3" /></label>
+            <label class="number-field select-field"><span>Points that can be displaced</span><select id="movable-points"><option value="3">3</option><option value="5" selected>5</option><option value="9">9</option><option value="15">15</option><option value="all">All</option></select></label>
+            <p class="help" id="route-detail-summary">Count updates with the route.</p>
+          </section>
+
+          <dialog id="route-detail-dialog" class="help-dialog" aria-labelledby="route-detail-dialog-title">
+            <div class="help-dialog-heading"><h2 id="route-detail-dialog-title">Route detail</h2><button id="close-route-detail-help" type="button" aria-label="Close help">×</button></div>
+            <p><strong>Curve sample spacing</strong> is the target gap between sampled road vertices. Every vertex has a height that the solver can change. Smaller gaps give more detail and take more time.</p>
+            <p><strong>Points that can be displaced</strong> sets how many interior vertices have independent sideways moves in the 2D search. Small dots mark them on the route. The solver spreads each move to the points between them. The two endpoints stay fixed.</p>
+            <p>Fewer move points and fewer search trials usually finish sooner. They can miss a better route. This setting does not change the 0.25 m grid used to estimate earthwork during optimization.</p>
+          </dialog>
 
           <section class="form-section costs-section">
             <div class="section-title"><h2>Cost rates</h2><span>PER UNIT</span></div>
@@ -100,10 +112,10 @@
           </div>
           <div class="scene-wrap">
             <div id="scene-host" aria-label="Three-dimensional terrain and solved road"></div>
-            <fieldset id="surface-selector" class="surface-selector" hidden>
+            <fieldset id="surface-selector" class="surface-selector" data-surface="solution" hidden>
               <legend>3D SURFACE</legend>
-              <label><input id="surface-original" type="radio" name="solution-surface" value="original" /> Original surface</label>
-              <label><input id="surface-solution" type="radio" name="solution-surface" value="solution" checked /> Solution surface</label>
+              <label class="surface-choice surface-choice-original"><input id="surface-original" type="radio" name="solution-surface" value="original" /> Original surface</label>
+              <label class="surface-choice surface-choice-solution"><input id="surface-solution" type="radio" name="solution-surface" value="solution" checked /> Solution surface</label>
             </fieldset>
             <div class="scene-projection" role="group" aria-label="Camera projection">
               <button id="perspective-mode" type="button" aria-pressed="true">Perspective</button>
