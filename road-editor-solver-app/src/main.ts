@@ -635,6 +635,11 @@ function setProjection(mode: 'perspective' | 'orthographic'): void {
   camera = nextCamera;
   controls = createOrbitControls(camera);
   controls.target.copy(target);
+  if (camera instanceof THREE.PerspectiveCamera) {
+    const perspectiveDistance = camera.position.distanceTo(target);
+    controls.minDistance = Math.min(55, perspectiveDistance * 0.9);
+    controls.maxDistance = Math.max(360, perspectiveDistance * 1.1);
+  }
   controls.update();
   projectionMode = mode;
   document.querySelector<HTMLButtonElement>('#perspective-mode')!.setAttribute('aria-pressed', String(mode === 'perspective'));
@@ -664,16 +669,20 @@ function updateReferenceAxes(data: TerrainFile): void {
   const yLength = Math.min(30, (height - 1) * cell[1] * 0.34);
   const zLength = Math.max(18, Math.min(32, Math.max(...heights) - Math.min(...heights) + 8));
 
+  const configureMaterial = (material: THREE.Material | THREE.Material[], opacity: number): void => {
+    const materials = Array.isArray(material) ? material : [material];
+    for (const item of materials) {
+      item.depthTest = false;
+      item.depthWrite = false;
+      item.transparent = true;
+      item.opacity = opacity;
+    }
+  };
+
   const addArrow = (direction: THREE.Vector3, color: string, length: number): void => {
     const arrow = new THREE.ArrowHelper(direction, start, length, color, Math.min(4, length * 0.17), 2.2);
-    arrow.line.material.depthTest = false;
-    arrow.line.material.depthWrite = false;
-    arrow.line.material.transparent = true;
-    arrow.line.material.opacity = 0.88;
-    arrow.cone.material.depthTest = false;
-    arrow.cone.material.depthWrite = false;
-    arrow.cone.material.transparent = true;
-    arrow.cone.material.opacity = 0.94;
+    configureMaterial(arrow.line.material, 0.88);
+    configureMaterial(arrow.cone.material, 0.94);
     arrow.renderOrder = 10;
     arrow.line.renderOrder = 10;
     arrow.cone.renderOrder = 10;
@@ -751,6 +760,7 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
     const centerZ = (min + max) / 2;
     const distance = Math.max((map.width - 1) * map.cell_size_m[0], (map.height - 1) * map.cell_size_m[1]) * 1.72;
     controls.target.set(centerX, centerY, centerZ);
+    controls.minDistance = 55;
     camera.up.set(0, 0, 1);
     camera.position.set(centerX + distance * 0.78, centerY - distance * 0.95, centerZ + distance * 0.86);
     camera.near = Math.max(0.1, distance / 1000);
@@ -783,6 +793,7 @@ function resetTopView(data: TerrainFile): void {
   camera.position.set(centerX, centerY - distance * 0.005, centerZ + distance);
   camera.near = Math.max(0.1, distance / 1000);
   camera.far = distance * 12;
+  controls.minDistance = 55;
   if (camera instanceof THREE.OrthographicCamera) {
     setOrthographicHalfHeight(Math.max(height, width / aspect) * 0.575);
     camera.zoom = 1;
