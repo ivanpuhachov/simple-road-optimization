@@ -4,25 +4,22 @@
 
 ## Requirements
 
-Python 3.14 or newer, `uv`, Node.js, and npm.
+Python 3.14 or newer, `uv`, Node.js, npm, and tmux.
 
 ## Run
 
-In a terminal at the repository root, install the Python packages and start the API:
+From the repository root, install the Python and web app packages:
 
 ```sh
-uv sync
-uv run uvicorn server:app --app-dir road-editor-solver-app --port 8765
+./install.sh
 ```
 
-In a second terminal, start the web app:
+Start the API and web app in one tmux session:
 
 ```sh
-cd road-editor-solver-app
-npm ci
-npm run dev
+./run.sh
 ```
 
-Open the URL shown by Vite. The web app sends solve requests to the API at `127.0.0.1:8765`.
+Open `http://127.0.0.1:5173`. Detach from tmux with Ctrl-B, then D. Run `./run.sh` to join the running session, or `./run.sh -r` to restart both servers. The web app sends solve requests to the API at `127.0.0.1:8765`.
 
 See the [app README](road-editor-solver-app/README.md) for more details.
