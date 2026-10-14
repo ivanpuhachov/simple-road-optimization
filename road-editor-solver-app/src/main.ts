@@ -61,6 +61,7 @@ const sceneError = document.querySelector<HTMLDivElement>('#scene-error')!;
 const planStatus = document.querySelector<HTMLSpanElement>('#plan-status')!;
 const mapInstruction = document.querySelector<HTMLSpanElement>('#map-instruction')!;
 const solveButton = document.querySelector<HTMLButtonElement>('#solve-road')!;
+const solve2dButton = document.querySelector<HTMLButtonElement>('#solve-road-2d')!;
 const importSolutionButton = document.querySelector<HTMLButtonElement>('#import-solution')!;
 const solutionFilesInput = document.querySelector<HTMLInputElement>('#solution-files')!;
 const endpointAButton = document.querySelector<HTMLButtonElement>('#set-a')!;
@@ -645,6 +646,30 @@ function buildTerrain(data: TerrainFile, resetCamera: boolean): void {
   }
 }
 
+function resetTopView(data: TerrainFile): void {
+  const map = data.heightmap;
+  const width = (map.width - 1) * map.cell_size_m[0];
+  const height = (map.height - 1) * map.cell_size_m[1];
+  const centerX = map.origin_m[0] + width / 2;
+  const centerY = map.origin_m[1] + height / 2;
+  const centerZ = (Math.min(...map.heights) + Math.max(...map.heights)) / 2;
+  const halfVerticalFov = THREE.MathUtils.degToRad(camera.fov) / 2;
+  const distance = 1.15 * Math.max(height, width / camera.aspect)
+    / (2 * Math.tan(halfVerticalFov));
+
+  controls.target.set(centerX, centerY, centerZ);
+  // A slight southern offset keeps north at the top while avoiding a singular look direction.
+  camera.position.set(centerX, centerY - distance * 0.005, centerZ + distance);
+  camera.near = Math.max(0.1, distance / 1000);
+  camera.far = distance * 12;
+  camera.updateProjectionMatrix();
+  controls.maxDistance = Math.max(360, distance * 1.5);
+  if (scene.fog instanceof THREE.Fog) scene.fog.far = Math.max(420, distance * 2.5);
+  controls.enableDamping = false;
+  controls.update();
+  controls.enableDamping = true;
+}
+
 function makeTerrainLines(data: TerrainFile): THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> {
   const map = data.heightmap;
   const points: number[] = [];
@@ -904,6 +929,7 @@ function displaySolution(
   loadSequence += 1;
   terrainLoading = false;
   solveButton.disabled = solving;
+  solve2dButton.disabled = solving;
   if (!keepEditing) editVersion += 1;
   clearSolutionOverlay();
   disposeMesh(roadMesh);
@@ -981,7 +1007,7 @@ async function importSolution(files: File[]): Promise<void> {
     const roadDocuments = selected.filter((entry): entry is SelectedJson & { value: RoadDocument } => isRoadDocument(entry.value));
     const solutionEntry = roadDocuments.find((entry) => /solution/i.test(entry.file.name))
       ?? roadDocuments.find((entry) => !/input|original/i.test(entry.file.name));
-    if (!solutionEntry) throw new Error('Select a Problem 1 solution JSON file.');
+    if (!solutionEntry) throw new Error('Select a road solution JSON file.');
     const inputEntry = roadDocuments.find((entry) => entry !== solutionEntry && /input|original/i.test(entry.file.name))
       ?? (roadDocuments.length > 1 ? roadDocuments.find((entry) => entry !== solutionEntry) : undefined);
     const reportEntry = selected.find((entry) => isCostReport(entry.value));
@@ -991,9 +1017,9 @@ async function importSolution(files: File[]): Promise<void> {
     const report = reportEntry && isCostReport(reportEntry.value) ? reportEntry.value : undefined;
     const input = inputEntry?.value;
     validateSolution(solution);
-    if (report && (report.status !== 'optimal' || !report.valid
+    if (report && (!['optimal', 'best_found'].includes(report.status) || !report.valid
       || !Number.isFinite(report.total_cost) || !Number.isFinite(report.length_m))) {
-      throw new Error('The cost report does not describe a valid optimal solution.');
+      throw new Error('The cost report does not describe a valid solution.');
     }
 
     const oldTerrain = await originalTerrainFor(solution, input);
@@ -1097,7 +1123,7 @@ function solveFailureMessage(result: SolveResponse): string {
   return result.error || 'Solver returned ' + result.status;
 }
 
-async function solveRoad(): Promise<void> {
+async function solveRoad(displacement: boolean): Promise<void> {
   if (solving) return;
   let road: RoadDocument;
   try {
@@ -1110,16 +1136,20 @@ async function solveRoad(): Promise<void> {
   const version = editVersion;
   solving = true;
   solveButton.disabled = true;
-  solveButton.textContent = 'Solving…';
+  solve2dButton.disabled = true;
+  const activeButton = displacement ? solve2dButton : solveButton;
+  activeButton.textContent = 'Solving…';
   sceneError.hidden = true;
-  sceneLoading.innerHTML = '<span class="spinner"></span> Solving road elevations';
+  sceneLoading.innerHTML = '<span class="spinner"></span> '
+    + (displacement ? 'Searching road positions and elevations' : 'Solving road elevations');
   sceneLoading.hidden = false;
   previewState.textContent = 'SOLVING';
   previewState.className = 'preview-state';
-  planStatus.textContent = 'Optimizing ' + road.curve.length + ' road vertices…';
+  planStatus.textContent = (displacement ? 'Searching 2D positions for ' : 'Optimizing ')
+    + road.curve.length + ' road vertices…';
 
   try {
-    const response = await fetch('/api/solve', {
+    const response = await fetch(displacement ? '/api/solve-2d' : '/api/solve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ document: road }),
@@ -1132,13 +1162,20 @@ async function solveRoad(): Promise<void> {
       previewState.className = hasRoadPreview ? 'preview-state stale' : 'preview-state';
       return;
     }
-    if (result.status !== 'optimal') {
+    if (result.status !== (displacement ? 'best_found' : 'optimal')) {
       throw new Error(solveFailureMessage(result));
     }
     if (!isRoadDocument(result.solution) || !isCostReport(result.report)) {
       throw new Error('Solver returned an incomplete solution');
     }
-    displaySolution(result.solution, road.terrain, result.report, 'Solved height field', true);
+    displaySolution(
+      result.solution,
+      road.terrain,
+      result.report,
+      displacement ? 'Solved 2D displacement and height field' : 'Solved height field',
+      !displacement,
+    );
+    if (displacement) resetTopView(result.solution.terrain);
   } catch (error) {
     if (version === editVersion) {
       const message = error instanceof Error ? error.message : 'Could not solve route';
@@ -1151,12 +1188,15 @@ async function solveRoad(): Promise<void> {
   } finally {
     solving = false;
     solveButton.disabled = terrainLoading;
+    solve2dButton.disabled = terrainLoading;
     solveButton.innerHTML = 'Solve <span>↗</span>';
+    solve2dButton.innerHTML = 'Solve with 2D displacement <span>↗</span>';
     if (!terrainLoading) sceneLoading.hidden = true;
   }
 }
 
-solveButton.addEventListener('click', () => { void solveRoad(); });
+solveButton.addEventListener('click', () => { void solveRoad(false); });
+solve2dButton.addEventListener('click', () => { void solveRoad(true); });
 
 function exportJson(): void {
   try {
@@ -1165,10 +1205,10 @@ function exportJson(): void {
     const url = URL.createObjectURL(blob);
     const link = documentCreateLink();
     link.href = url;
-    link.download = 'problem1-road-input.json';
+    link.download = 'road-input.json';
     link.click();
     URL.revokeObjectURL(url);
-    planStatus.textContent = 'Problem 1 JSON downloaded';
+    planStatus.textContent = 'Road JSON downloaded';
   } catch (error) {
     planStatus.textContent = error instanceof Error ? error.message : 'Could not export route';
   }
@@ -1184,6 +1224,7 @@ async function loadTerrain(key: string): Promise<void> {
   editVersion += 1;
   terrainLoading = true;
   solveButton.disabled = true;
+  solve2dButton.disabled = true;
   currentTerrainKey = key;
   sceneError.hidden = true;
   sceneLoading.innerHTML = '<span class="spinner"></span> Loading terrain model';
@@ -1224,6 +1265,7 @@ async function loadTerrain(key: string): Promise<void> {
     if (sequence === loadSequence) {
       terrainLoading = false;
       solveButton.disabled = solving;
+      solve2dButton.disabled = solving;
     }
   }
 }
