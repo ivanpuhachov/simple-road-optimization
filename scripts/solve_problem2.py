@@ -35,7 +35,9 @@ if __package__:
     )
     from .solve_problem1 import (
         GRADE_FEASIBILITY_TOLERANCE_M,
+        MAX_QUADRATURE_POINTS,
         MAX_SOLVER_ADJUSTMENT_M,
+        QuadraturePointLimitError,
         build_quadrature,
         grade_heightmap_vertices,
         price_solution,
@@ -54,7 +56,9 @@ else:
     )
     from solve_problem1 import (
         GRADE_FEASIBILITY_TOLERANCE_M,
+        MAX_QUADRATURE_POINTS,
         MAX_SOLVER_ADJUSTMENT_M,
+        QuadraturePointLimitError,
         build_quadrature,
         grade_heightmap_vertices,
         price_solution,
@@ -183,7 +187,7 @@ class CandidateEvaluator:
             return self.cache[key]
         if self.remaining <= 0:
             return None
-        result = self._evaluate_uncached(offsets.copy())
+        result = self._evaluate_uncached(offsets.copy(), self.quadrature_step_m)
         self.cache[key] = result
         self.history.append(
             {
@@ -196,7 +200,9 @@ class CandidateEvaluator:
         )
         return result
 
-    def _evaluate_uncached(self, offsets: np.ndarray) -> Candidate:
+    def _evaluate_uncached(
+        self, offsets: np.ndarray, quadrature_step_m: float
+    ) -> Candidate:
         curve = self.baseline.copy()
         curve[1:-1, :2] += offsets[:, None] * self.baseline_normals[1:-1]
         if not np.all(np.isfinite(curve)):
@@ -238,7 +244,7 @@ class CandidateEvaluator:
                 curve,
                 self.heightmap,
                 self.constraints["w"],
-                self.quadrature_step_m,
+                quadrature_step_m,
             )
             elevations, optimization = solve_heights(
                 interpolation,
@@ -250,7 +256,7 @@ class CandidateEvaluator:
                 end_z,
                 self.rates,
             )
-            optimization["quadrature_step_m"] = self.quadrature_step_m
+            optimization["quadrature_step_m"] = quadrature_step_m
             if elevations is None:
                 return Candidate(
                     offsets,
@@ -309,6 +315,8 @@ class CandidateEvaluator:
                 )
         except IntegrationGeometryError as error:
             return Candidate(offsets, "invalid_path", str(error))
+        except QuadraturePointLimitError:
+            raise
         except (cp.SolverError, ValueError, OverflowError) as error:
             return Candidate(offsets, "solver_failure", str(error))
 
@@ -357,6 +365,43 @@ def search_directions(baseline: np.ndarray, seed: int) -> list[np.ndarray]:
     return directions
 
 
+def finer_quadrature_step(curve: np.ndarray, width: float, coarse_step: float) -> float:
+    """Choose a finer grid that stays within the quadrature point limit."""
+    lengths = np.linalg.norm(np.diff(curve[:, :2], axis=0), axis=1)
+
+    def point_count(step: float) -> int:
+        return sum(max(1, math.ceil(float(length) / step)) for length in lengths) * max(
+            1, math.ceil(width / step)
+        )
+
+    coarse_points = point_count(coarse_step)
+    if coarse_points >= MAX_QUADRATURE_POINTS:
+        raise QuadraturePointLimitError(
+            f"cannot refine the final elevation solve within the {MAX_QUADRATURE_POINTS}-point "
+            "quadrature limit; increase --quadrature-step-m"
+        )
+    target = coarse_step / 2.0
+    while target > 0 and point_count(target) == coarse_points:
+        target /= 2.0
+    if target <= 0:
+        raise QuadraturePointLimitError("quadrature step is too small to refine")
+    if point_count(target) <= MAX_QUADRATURE_POINTS:
+        return target
+    lower, upper = target, coarse_step
+    for _ in range(40):
+        middle = (lower + upper) / 2.0
+        if point_count(middle) <= MAX_QUADRATURE_POINTS:
+            upper = middle
+        else:
+            lower = middle
+    if point_count(upper) == coarse_points:
+        raise QuadraturePointLimitError(
+            f"cannot refine the final elevation solve within the {MAX_QUADRATURE_POINTS}-point "
+            "quadrature limit; increase --quadrature-step-m"
+        )
+    return upper
+
+
 def search_offsets(
     evaluator: CandidateEvaluator,
     lower: np.ndarray,
@@ -373,8 +418,52 @@ def search_offsets(
     if not directions or np.all(lower == upper):
         return "fixed_offsets", 0, len(directions)
 
-    move = initial_move_m
     accepted_moves = 0
+    if not math.isfinite(current.cost):
+        bound_move = float(max(np.max(-lower), np.max(upper)))
+        probe_moves = [bound_move]
+        probe = min(initial_move_m, bound_move)
+        while probe < bound_move:
+            probe_moves.append(probe)
+            probe = min(2.0 * probe, bound_move)
+        probe_moves.append(bound_move)
+        coarse_moves = sorted(set(probe_moves))
+        probe_moves.extend(
+            (left + right) / 2.0
+            for left, right in sorted(
+                zip(coarse_moves, coarse_moves[1:]),
+                key=lambda pair: pair[1] - pair[0],
+                reverse=True,
+            )
+        )
+        probe = min(initial_move_m, bound_move) / 2.0
+        while probe >= min_move_m:
+            probe_moves.append(probe)
+            probe /= 2.0
+        found_start = False
+        for probe_move in probe_moves:
+            for direction in directions:
+                for sign in (1.0, -1.0):
+                    trial = np.clip(sign * probe_move * direction, lower, upper)
+                    if np.array_equal(trial, current_offsets):
+                        continue
+                    candidate = evaluator.evaluate(trial)
+                    if candidate is None:
+                        return "evaluation_budget", accepted_moves, len(directions)
+                    if math.isfinite(candidate.cost):
+                        current = candidate
+                        current_offsets = trial
+                        accepted_moves = 1
+                        found_start = True
+                        break
+                if found_start:
+                    break
+            if found_start:
+                break
+        if not found_start:
+            return "no_feasible_start", accepted_moves, len(directions)
+
+    move = initial_move_m
     rotation = 0
     while move >= min_move_m:
         if evaluator.remaining <= 0:
@@ -480,20 +569,35 @@ def solve(
         (candidate for candidate in evaluator.cache.values() if math.isfinite(candidate.cost)),
         key=lambda candidate: candidate.cost,
     )
-    chosen: Candidate | None = None
+    refined_candidates: list[
+        tuple[Candidate, Candidate, list[float], dict[str, float | int]]
+    ] = []
     graded_heights: list[float] | None = None
     terrain_update: dict[str, float | int] | None = None
     output_errors: list[str] = []
     for candidate in valid_candidates:
+        if len(refined_candidates) >= 3:
+            break
         try:
-            graded_heights, terrain_update = grade_heightmap_vertices(
-                candidate.curve, heightmap, constraints["w"]
+            fine_step = finer_quadrature_step(
+                candidate.curve, constraints["w"], quadrature_step_m
             )
-        except IntegrationGeometryError as error:
+            refined = evaluator._evaluate_uncached(candidate.offsets.copy(), fine_step)
+            if refined.status != "valid":
+                output_errors.append(
+                    f"final elevation solve at offsets {candidate.offsets.tolist()}: "
+                    f"{refined.reason or refined.status}"
+                )
+                continue
+            candidate_heights, candidate_update = grade_heightmap_vertices(
+                refined.curve, heightmap, constraints["w"]
+            )
+        except (IntegrationGeometryError, QuadraturePointLimitError) as error:
             output_errors.append(str(error))
             continue
-        chosen = candidate
-        break
+        refined_candidates.append(
+            (candidate, refined, candidate_heights, candidate_update)
+        )
 
     search_report = {
         "method": "bounded pattern search with joint smooth directions",
@@ -515,11 +619,64 @@ def solve(
         "total_cost": baseline_result.cost if math.isfinite(baseline_result.cost) else None,
         "reason": baseline_result.reason,
     }
+    if math.isfinite(baseline_result.cost):
+        baseline_summary["search_total_cost"] = baseline_result.cost
+        if not any(
+            np.array_equal(coarse.offsets, baseline_result.offsets)
+            for coarse, _, _, _ in refined_candidates
+        ):
+            try:
+                baseline_step = finer_quadrature_step(
+                    baseline_result.curve, constraints["w"], quadrature_step_m
+                )
+                refined_baseline = evaluator._evaluate_uncached(
+                    baseline_result.offsets.copy(), baseline_step
+                )
+                if refined_baseline.status == "valid":
+                    baseline_heights, baseline_update = grade_heightmap_vertices(
+                        refined_baseline.curve, heightmap, constraints["w"]
+                    )
+                    refined_candidates.append(
+                        (baseline_result, refined_baseline, baseline_heights, baseline_update)
+                    )
+                else:
+                    baseline_summary["refinement_error"] = (
+                        refined_baseline.reason or refined_baseline.status
+                    )
+            except (IntegrationGeometryError, QuadraturePointLimitError) as error:
+                baseline_summary["refinement_error"] = str(error)
+        matching = next(
+            (
+                refined
+                for coarse, refined, _, _ in refined_candidates
+                if np.array_equal(coarse.offsets, baseline_result.offsets)
+            ),
+            None,
+        )
+        if matching is not None:
+            baseline_summary["total_cost"] = matching.cost
+            baseline_summary["quadrature_step_m"] = matching.optimization[
+                "quadrature_step_m"
+            ]
+        else:
+            baseline_summary["total_cost"] = None
+
+    chosen: Candidate | None = None
+    chosen_search: Candidate | None = None
+    if refined_candidates:
+        chosen_search, chosen, graded_heights, terrain_update = min(
+            refined_candidates, key=lambda item: item[1].cost
+        )
     if chosen is None:
+        status = "numerical_failure" if valid_candidates else "no_feasible_candidate"
         return {
-            "status": "no_feasible_candidate",
+            "status": status,
             "valid": False,
-            "error": "search found no candidate with a valid road and converged cost",
+            "error": (
+                output_errors[0]
+                if status == "numerical_failure" and output_errors
+                else "search found no candidate with a valid road and converged cost"
+            ),
             "baseline": baseline_summary,
             "search": search_report,
             "output_errors": output_errors,
@@ -547,6 +704,13 @@ def solve(
         "cost_change_from_baseline": chosen.cost - baseline_cost if baseline_cost is not None else None,
         "terrain_update": terrain_update,
         "search": search_report,
+        "final_refinement": {
+            "candidates_refined": len(refined_candidates),
+            "search_quadrature_step_m": quadrature_step_m,
+            "final_quadrature_step_m": chosen.optimization["quadrature_step_m"],
+            "search_total_cost": chosen_search.cost,
+            "refined_total_cost": chosen.cost,
+        },
         "optimization": chosen.optimization,
         **chosen.price,
         "checks": chosen.checks,
@@ -621,7 +785,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "candidate_evaluations": result["search"]["evaluations"],
             "termination": result["search"]["termination"],
         }
-    elif result["status"] == "no_feasible_candidate":
+    elif result["status"] in ("no_feasible_candidate", "numerical_failure"):
         summary = {
             "status": result["status"],
             "valid": False,
@@ -632,7 +796,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         summary = result
     print(json.dumps(summary, indent=2, allow_nan=False))
-    return {"best_found": 0, "no_feasible_candidate": 1, "invalid_input": 2}[result["status"]]
+    return {
+        "best_found": 0,
+        "no_feasible_candidate": 1,
+        "invalid_input": 2,
+        "numerical_failure": 3,
+    }[result["status"]]
 
 
 if __name__ == "__main__":

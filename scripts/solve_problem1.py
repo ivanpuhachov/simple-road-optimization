@@ -61,6 +61,10 @@ MAX_SOLVER_ADJUSTMENT_M = 1e-4
 FOOTPRINT_TOLERANCE_M = 1e-9
 
 
+class QuadraturePointLimitError(ValueError):
+    """The requested quadrature grid exceeds the solver point limit."""
+
+
 def output_path_for(input_path: Path) -> Path:
     stem = input_path.stem
     if stem.endswith("-input"):
@@ -86,7 +90,7 @@ def build_quadrature(
     u_count = max(1, math.ceil(width / step_m))
     point_count = int(np.sum(t_counts) * u_count)
     if point_count > MAX_QUADRATURE_POINTS:
-        raise ValueError(
+        raise QuadraturePointLimitError(
             f"quadrature needs {point_count} points; increase --quadrature-step-m"
         )
 
