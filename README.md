@@ -2,8 +2,6 @@
 
 `road-editor-solver-app` is a web app for planning a road on a terrain map. Set the route, road limits, and cost rates in the 2D editor. Use **Solve** to find road heights, or **Solve with 2D displacement** to also move the route sideways. The app shows the result on a 3D terrain view.
 
-![Road editor showing a planned route and its 3D terrain solution](docs/images/solution-fix2d.png)
-
 ## Requirements
 
 Python 3.14 or newer, `uv`, Node.js, npm, and tmux.
@@ -24,16 +22,20 @@ Start the API and web app in one tmux session:
 
 Open `http://127.0.0.1:5173`. Detach from tmux with Ctrl-B, then D. Run `./run.sh` to join the running session, or `./run.sh -r` to restart both servers. The web app sends solve requests to the API at `127.0.0.1:8765`.
 
-## Options 
+## Solve Options 
 
 1. Pick terrain from dropdown.
 2. Modify the curve (initial guess)
+3. Solve (see below)
+4. (optional) Validation is built into both solve modes. Run scripts/check_road_constraints.py separately to check a saved road JSON file.
 
 ### Solve
 For the fixed 2D curve, solve for vertical alignment (a.k.a. Problem1)
+![Road editor showing a planned route and its 3D terrain solution](data/img/solution-fix2d.png)
 
 ### Solve with 2D displacement
 Solve allowing some points to move in 2D space (a.k.a Problem2)
+![Road editor showing a planned route and its 3D terrain solution](data/img/solution-with-displacement.png)
 
 
 ## Python scripts
